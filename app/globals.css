@@ -1,0 +1,13 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { color-scheme: light; }
+
+body {
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Tahoma, Arial, sans-serif;
+  font-feature-settings: "tnum";
+}
+
+/* Latin identifiers (ids, phone numbers) inside RTL text stay readable */
+.ltr { direction: ltr; unicode-bidi: isolate; }
