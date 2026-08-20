@@ -132,13 +132,22 @@ export async function fetchFormLeads(formId: string, since?: number): Promise<Ra
 
 // ── Field extraction ────────────────────────────────────────────────────────
 const NAME_KEYS = ["full_name", "first_name", "الاسم", "name"];
-const PHONE_KEYS = ["phone_number", "phone", "رقم", "whatsapp", "واتساب"];
+// Prefer the number the buyer typed themselves (WhatsApp) over the one Meta
+// auto-fills — the typed one is the number they actually answer on.
+const PHONE_KEYS = ["whatsapp", "واتساب", "phone_number", "phone", "رقم"];
 const EMAIL_KEYS = ["email", "بريد"];
 
+/**
+ * Picks a field by keyword PRIORITY, not by the order the form happens to list
+ * its questions in. The outer loop walks `keys`, so the first keyword that
+ * matches anything wins — which is what makes the ordering of PHONE_KEYS below
+ * actually mean something.
+ */
 function pick(fields: Record<string, string>, keys: string[]): string | undefined {
-  for (const k of Object.keys(fields)) {
-    const lower = k.toLowerCase();
-    if (keys.some((want) => lower.includes(want))) return fields[k];
+  for (const want of keys) {
+    for (const [name, value] of Object.entries(fields)) {
+      if (name.toLowerCase().includes(want) && value?.trim()) return value;
+    }
   }
   return undefined;
 }

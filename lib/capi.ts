@@ -41,7 +41,14 @@ export function buildEvent(input: CapiInput) {
   if (ph) user_data.ph = [sha256(ph)];
   if (input.email) user_data.em = [sha256(input.email)];
 
-  const custom_data: Record<string, unknown> = {};
+  // Meta's CRM / Conversion Leads contract: without these two, the event is
+  // accepted (200, events_received: 1) but treated as a plain custom event and
+  // never feeds the Conversion Leads optimisation. They must ALWAYS be present,
+  // not only when there is a deal value.
+  const custom_data: Record<string, unknown> = {
+    lead_event_source: process.env.META_LEAD_EVENT_SOURCE || "Dlleni CRM",
+    event_source: "crm",
+  };
   if (input.value != null && Number.isFinite(input.value)) {
     custom_data.value = input.value;
     custom_data.currency = input.currency || "EGP";
@@ -53,7 +60,7 @@ export function buildEvent(input: CapiInput) {
     event_id: `${input.leadId}:${input.eventName}`,
     action_source: "system_generated",
     user_data,
-    ...(Object.keys(custom_data).length ? { custom_data } : {}),
+    custom_data,
   };
 }
 
