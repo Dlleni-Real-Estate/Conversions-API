@@ -127,7 +127,7 @@ export async function GET(req: NextRequest) {
         for (const r of rows) if (r.form_id) formIdsSeen.add(String(r.form_id));
 
         if (rows.length === 0) {
-          const spend = await refreshInsights(db, campaign.id).then(
+          const spend = await refreshInsights(db, campaign.id, campaign.created_time).then(
             (r) => {
               insightsRows += r.rows;
               return r.spend;
@@ -152,7 +152,7 @@ export async function GET(req: NextRequest) {
           ads: ads.length,
           found,
           inserted: n,
-          spend: await refreshInsights(db, campaign.id).then(
+          spend: await refreshInsights(db, campaign.id, campaign.created_time).then(
             (r) => {
               insightsRows += r.rows;
               return r.spend;
@@ -219,14 +219,15 @@ export async function GET(req: NextRequest) {
  */
 async function refreshInsights(
   db: ReturnType<typeof supabaseAdmin>,
-  campaignId: string
+  campaignId: string,
+  createdTime?: string
 ): Promise<{ rows: number; spend: number }> {
   // Campaign level FIRST, because that is the number the dashboard reports.
   // It is taken from Meta verbatim rather than added up from the ad rows —
   // reach is deduplicated people, so adding it double-counts anyone who saw
   // two ads, and that is exactly how a dashboard starts disagreeing with
   // Ads Manager.
-  const campaign = await fetchCampaignInsights(campaignId);
+  const campaign = await fetchCampaignInsights(campaignId, createdTime);
   if (campaign) {
     const { error } = await db
       .from("campaign_insights")
@@ -234,7 +235,7 @@ async function refreshInsights(
     if (error) throw new Error(error.message);
   }
 
-  const ads = await fetchCampaignAdInsights(campaignId);
+  const ads = await fetchCampaignAdInsights(campaignId, createdTime);
   if (ads.length > 0) {
     const { error } = await db.from("ad_insights").upsert(
       ads.map((i) => ({ ...i, updated_at: new Date().toISOString() })),

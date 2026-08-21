@@ -70,9 +70,9 @@ export default function AnalyticsView({ data }: { data: Analytics }) {
           subtitle={t.fromMetaSub}
           accent="#1877f2"
           right={
-            meta.date_start && meta.date_stop ? (
+            meta.date_stop ? (
               <span className="rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800">
-                {t.reportedThrough(fmtDay(meta.date_start, locale), fmtDay(meta.date_stop, locale))}
+                {t.reportedThrough(fmtDay(meta.date_stop, locale))}
               </span>
             ) : undefined
           }

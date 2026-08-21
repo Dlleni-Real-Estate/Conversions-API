@@ -85,7 +85,7 @@ export const DICT = {
     // Analytics
     fromMeta: "Reported by Meta",
     fromMetaSub: "Exactly as Meta reports it — not recalculated here",
-    reportedThrough: (a: string, b: string) => `Meta has counted ${a} – ${b}`,
+    reportedThrough: (d: string) => `Counted through ${d} · includes today, still moving`,
     yourPipeline: "Your pipeline",
     yourPipelineSub: "Counted from your own leads, costed against Meta's spend",
     metaLeads: "Leads (Meta)",
@@ -96,7 +96,7 @@ export const DICT = {
     linkClicks: "Link clicks",
     reachAcrossCampaigns: "Reach is people, not events — Meta only deduplicates it per campaign, so pick one campaign to see it",
     metaLagNote:
-      "Meta's reporting lags by up to a day and applies attribution windows, so its lead count is usually behind the CRM's. Neither is wrong — they measure different moments.",
+      "Meta applies attribution windows and keeps recounting today's numbers for a few hours, so its lead count can trail the CRM's for a while. Neither is wrong — they measure different moments.",
     spend: "Spend",
     reached: "reached",
     untouched: "untouched",
@@ -242,7 +242,7 @@ export const DICT = {
 
     fromMeta: "أرقام ميتا",
     fromMetaSub: "زي ما ميتا بتقولها بالظبط — مش متحسبة هنا",
-    reportedThrough: (a: string, b: string) => `ميتا حسبت لغاية ${a} – ${b}`,
+    reportedThrough: (d: string) => `محسوبة لغاية ${d} · شاملة النهاردة، ولسه بتتحرك`,
     yourPipeline: "أرقام فريقك",
     yourPipelineSub: "محسوبة من الليدز عندك، والتكلفة على مصروف ميتا",
     metaLeads: "ليدز (ميتا)",
@@ -253,7 +253,7 @@ export const DICT = {
     linkClicks: "كليكات اللينك",
     reachAcrossCampaigns: "الوصول بيعد ناس مش أحداث — وميتا بتشيل التكرار جوه الكمبين الواحد بس، فاختار كمبين واحد عشان تشوفه",
     metaLagNote:
-      "تقارير ميتا بتتأخر لحد يوم وبتشتغل بـ attribution windows، فعدد الليدز عندها بيبقى أقل من اللي عندنا. مفيش رقم غلط — كل واحد بيقيس لحظة مختلفة.",
+      "ميتا بتشتغل بـ attribution windows وبتفضل تعيد حساب أرقام النهاردة لساعات، فعدد الليدز عندها ممكن يفضل أقل من اللي عندنا شوية. مفيش رقم غلط — كل واحد بيقيس لحظة مختلفة.",
     spend: "المصروف",
     reached: "وصلوا",
     untouched: "لسه محدش مسكهم",

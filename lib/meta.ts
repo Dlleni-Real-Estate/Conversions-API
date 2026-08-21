@@ -332,6 +332,51 @@ export async function fetchAdLeads(adId: string, since?: number): Promise<RawLea
   return out;
 }
 
+// ── Reporting window ────────────────────────────────────────────────────────
+//
+// THE TRAP: `date_preset=maximum` and `date_preset=last_30d` both stop at
+// YESTERDAY in this API. Ads Manager's "Maximum" includes today. On a campaign
+// that just scaled, that is not a rounding difference — it read 442 EGP of
+// spend when the real number was 1,551.
+//
+// So we always ask for an explicit time_range ending on TODAY in the ad
+// account's own timezone (Meta reports on the account's clock, not UTC), and
+// we ask for the whole span in one call: reach deduplicates people across days
+// as well as across ads, so two calls added together would overstate it again.
+
+let timezoneCache: string | null = null;
+
+async function accountTimezone(): Promise<string> {
+  if (timezoneCache) return timezoneCache;
+  const { token, adAccountId } = metaConfig();
+  const data = await graph<{ timezone_name?: string }>(
+    `/act_${adAccountId}`,
+    { fields: "timezone_name" },
+    token
+  );
+  timezoneCache = data.timezone_name || "UTC";
+  return timezoneCache;
+}
+
+/** YYYY-MM-DD in a given timezone. en-CA is the locale that formats that way. */
+function ymd(tz: string, date: Date): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: tz,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
+
+/** Campaign creation (or three years back) through today, account time. */
+async function insightsWindow(sinceIso?: string): Promise<{ since: string; until: string }> {
+  const tz = await accountTimezone();
+  const now = new Date();
+  const fallback = new Date(now.getTime() - 1000 * 60 * 60 * 24 * 365 * 3); // inside Meta's 37-month limit
+  const start = sinceIso && !Number.isNaN(Date.parse(sinceIso)) ? new Date(sinceIso) : fallback;
+  return { since: ymd(tz, start), until: ymd(tz, now) };
+}
+
 // ── Delivery & spend ────────────────────────────────────────────────────────
 //
 // Lifetime insights at ad level for one campaign. This is what turns the
@@ -428,13 +473,16 @@ export type CampaignInsight = Omit<AdInsight, "ad_id" | "ad_name" | "adset_id" |
  * applied per level. When the dashboard and Ads Manager disagree, the reason is
  * almost always that someone added something Meta had already deduplicated.
  */
-export async function fetchCampaignInsights(campaignId: string): Promise<CampaignInsight | null> {
+export async function fetchCampaignInsights(
+  campaignId: string,
+  createdTime?: string
+): Promise<CampaignInsight | null> {
   const { token } = metaConfig();
   const page: { data: InsightRow[] } = await graph(
     `/${campaignId}/insights`,
     {
       level: "campaign",
-      date_preset: "maximum",
+      time_range: JSON.stringify(await insightsWindow(createdTime)),
       limit: "1",
       fields:
         "campaign_id,campaign_name,spend,impressions,reach,frequency,clicks,inline_link_clicks," +
@@ -466,17 +514,21 @@ export async function fetchCampaignInsights(campaignId: string): Promise<Campaig
   };
 }
 
-export async function fetchCampaignAdInsights(campaignId: string): Promise<AdInsight[]> {
+export async function fetchCampaignAdInsights(
+  campaignId: string,
+  createdTime?: string
+): Promise<AdInsight[]> {
   const { token } = metaConfig();
   const out: AdInsight[] = [];
   let after: string | undefined;
+  const window = await insightsWindow(createdTime);
 
   do {
     const page: { data: InsightRow[]; paging?: { cursors?: { after?: string }; next?: string } } = await graph(
       `/${campaignId}/insights`,
       {
         level: "ad",
-        date_preset: "maximum",
+        time_range: JSON.stringify(window),
         limit: "200",
         fields:
           "ad_id,ad_name,adset_id,adset_name,campaign_id,campaign_name,spend,impressions,reach," +
