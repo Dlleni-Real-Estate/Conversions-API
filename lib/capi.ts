@@ -207,7 +207,12 @@ export async function sendLeadEvents(inputs: CapiInput[], chunkSize = 100) {
       .in("event_id", events.map((e) => e.event_id));
 
     if (result.ok) sent += slice.length;
-    else failed += slice.length;
+    else {
+      failed += slice.length;
+      // Meta discards the WHOLE chunk on one bad event, so the reason has to be
+      // readable from the platform log — the caller only sees a count.
+      console.error(`[capi] chunk of ${slice.length} rejected: ${result.error}`);
+    }
   }
 
   return { attempted: inputs.length, sent, failed };

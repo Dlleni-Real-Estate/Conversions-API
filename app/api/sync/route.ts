@@ -195,6 +195,15 @@ export async function GET(req: NextRequest) {
         .eq("id", run.id);
     }
 
+    // Printed so a cron run can be read back from the platform log. Without it
+    // the only record of what a scheduled sync did is the HTTP status, and a
+    // sync that sent nothing looks exactly like one that sent everything.
+    console.log(
+      `[sync] campaigns=${tracked.length}/${states.length} ads=${adsSeen} ` +
+        `leads=${leadsFound} new=${leadsNew} stageEvents=${stageEvents} ` +
+        `insights=${insightsRows} forms=${formsStored}`
+    );
+
     return NextResponse.json({
       ok: true,
       cutoff,
@@ -377,6 +386,12 @@ async function sendMissingStageEvents(
 
   if (missing.length === 0) return 0;
 
-  const result = await sendLeadEvents(missing).catch(() => ({ attempted: 0, sent: 0, failed: 0 }));
+  const result = await sendLeadEvents(missing).catch((err) => {
+    console.error("[sync] stage events failed", err);
+    return { attempted: 0, sent: 0, failed: missing.length };
+  });
+  console.log(
+    `[sync] stage events attempted=${result.attempted} sent=${result.sent} failed=${result.failed}`
+  );
   return result.sent;
 }
