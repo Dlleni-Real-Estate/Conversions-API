@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { STAGES, STAGE_BY_STATUS, QUALIFIED_STATUSES, type Status } from "@/lib/stages";
+import CampaignSettings from "@/components/CampaignSettings";
 
 type Lead = {
   lead_id: string;
@@ -125,7 +126,7 @@ export default function Dashboard() {
       const json = await res.json();
       setMsg(
         json.ok
-          ? `✅ ${json.leadsNew} ليد جديد من ${json.formsSeen} فورم`
+          ? `✅ ${json.leadsNew} ليد جديد · ${json.campaignsTracked} كمبين متابَعة من ${json.campaignsTotal}`
           : `❌ ${json.error}`
       );
       await load();
@@ -210,6 +211,8 @@ export default function Dashboard() {
         <Tile label="زبالة" value={stats.junk} tone="text-red-600" />
         <Tile label="باع" value={stats.won} tone="text-green-700" />
       </section>
+
+      <CampaignSettings pw={pw} />
 
       <section className="mt-6 flex flex-wrap items-center gap-2">
         <select

@@ -1,5 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { listLeadForms, fetchFormLeads, flattenFields, normalizeEgyptPhone } from "@/lib/meta";
+import {
+  listCampaigns,
+  listCampaignAds,
+  fetchAdLeads,
+  listLeadForms,
+  flattenFields,
+  normalizeEgyptPhone,
+} from "@/lib/meta";
+import { resolveCampaigns } from "@/lib/tracking";
 import { supabaseAdmin } from "@/lib/supabase";
 import { isAuthed } from "@/lib/auth";
 
@@ -7,11 +15,17 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 /**
- * Pulls new leads from every instant form on the Page into Supabase.
- * Runs on a Vercel cron every 10 minutes; also callable by hand.
+ * Re-reads a slice of history on every run so a lead that arrives out of order
+ * (or lands while a sync is mid-flight) is not skipped forever. Cheap, because
+ * `ignoreDuplicates` makes re-reading a no-op at the database.
+ */
+const OVERLAP_MS = 2 * 60 * 60 * 1000;
+
+/**
+ * Pulls leads from the TRACKED campaigns only — see lib/tracking.ts for how a
+ * campaign becomes tracked (new ones are, automatically).
  *
- * `?full=1` ignores the incremental watermark and re-reads every lead — use it
- * once on first run to backfill history.
+ * `?full=1` ignores the watermark and re-reads every lead of those campaigns.
  */
 export async function GET(req: NextRequest) {
   if (!isAuthed(req)) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
@@ -22,63 +36,87 @@ export async function GET(req: NextRequest) {
 
   const { data: run } = await db.from("sync_runs").insert({ started_at: startedAt }).select("id").single();
 
-  let formsSeen = 0;
+  let adsSeen = 0;
   let leadsFound = 0;
   let leadsNew = 0;
-  const perForm: { form: string; found: number; inserted: number; error?: string }[] = [];
+  const perCampaign: { campaign: string; ads: number; found: number; inserted: number; error?: string }[] = [];
 
   try {
-    const forms = await listLeadForms();
-    formsSeen = forms.length;
+    const { cutoff, states, tracked } = await resolveCampaigns(db, await listCampaigns());
 
-    for (const form of forms) {
+    // The lead object carries form_id but not the form's title, and the title
+    // is what the dashboard shows. One paged call for the whole Page, resolved
+    // once per run rather than once per lead.
+    const formNames = new Map<string, string>();
+    if (tracked.length > 0) {
       try {
-        // Incremental watermark: only ask Meta for leads newer than our newest.
+        for (const f of await listLeadForms()) formNames.set(f.id, f.name);
+      } catch {
+        // A missing form title is cosmetic — never fail a sync over it.
+      }
+    }
+
+    for (const campaign of tracked) {
+      try {
+        // One watermark per campaign, not per ad: a campaign's ads share a
+        // timeline, and this keeps it to a single query however many ads run.
         let since: number | undefined;
         if (!full) {
           const { data: newest } = await db
             .from("leads")
             .select("submitted_at")
-            .eq("form_id", form.id)
+            .eq("campaign_id", campaign.id)
             .order("submitted_at", { ascending: false })
             .limit(1)
             .maybeSingle();
           if (newest?.submitted_at) {
-            since = Math.floor(new Date(newest.submitted_at).getTime() / 1000);
+            since = Math.floor((new Date(newest.submitted_at).getTime() - OVERLAP_MS) / 1000);
           }
         }
 
-        const raw = await fetchFormLeads(form.id, since);
-        leadsFound += raw.length;
+        const ads = await listCampaignAds(campaign.id);
+        adsSeen += ads.length;
 
-        if (raw.length === 0) {
-          perForm.push({ form: form.name, found: 0, inserted: 0 });
-          continue;
+        const rows: Record<string, unknown>[] = [];
+        let found = 0;
+
+        for (const ad of ads) {
+          const raw = await fetchAdLeads(ad.id, since);
+          found += raw.length;
+
+          for (const lead of raw) {
+            const { fields, full_name, phone, email } = flattenFields(lead);
+            rows.push({
+              lead_id: lead.id,
+              form_id: lead.form_id ?? null,
+              form_name: (lead.form_id && formNames.get(lead.form_id)) || null,
+              page_id: process.env.META_PAGE_ID,
+              // Names come from the walk, so they are right even when Meta
+              // omits them from the lead object.
+              ad_id: ad.id,
+              ad_name: ad.name,
+              adset_id: ad.adset_id ?? lead.adset_id ?? null,
+              adset_name: ad.adset_name ?? lead.adset_name ?? null,
+              campaign_id: campaign.id,
+              campaign_name: campaign.name,
+              platform: lead.platform ?? null,
+              is_organic: lead.is_organic ?? false,
+              submitted_at: lead.created_time,
+              full_name: full_name ?? null,
+              phone: normalizeEgyptPhone(phone) ?? null,
+              email: email ?? null,
+              raw_fields: fields,
+              synced_at: new Date().toISOString(),
+            });
+          }
         }
 
-        const rows = raw.map((lead) => {
-          const { fields, full_name, phone, email } = flattenFields(lead);
-          return {
-            lead_id: lead.id,
-            form_id: lead.form_id || form.id,
-            form_name: form.name,
-            page_id: process.env.META_PAGE_ID,
-            ad_id: lead.ad_id ?? null,
-            ad_name: lead.ad_name ?? null,
-            adset_id: lead.adset_id ?? null,
-            adset_name: lead.adset_name ?? null,
-            campaign_id: lead.campaign_id ?? null,
-            campaign_name: lead.campaign_name ?? null,
-            platform: lead.platform ?? null,
-            is_organic: lead.is_organic ?? false,
-            submitted_at: lead.created_time,
-            full_name: full_name ?? null,
-            phone: normalizeEgyptPhone(phone) ?? null,
-            email: email ?? null,
-            raw_fields: fields,
-            synced_at: new Date().toISOString(),
-          };
-        });
+        leadsFound += found;
+
+        if (rows.length === 0) {
+          perCampaign.push({ campaign: campaign.name, ads: ads.length, found: 0, inserted: 0 });
+          continue;
+        }
 
         // ignoreDuplicates keeps a re-sync from wiping the sales team's status.
         const { data: inserted, error } = await db
@@ -89,10 +127,11 @@ export async function GET(req: NextRequest) {
         if (error) throw new Error(error.message);
         const n = inserted?.length ?? 0;
         leadsNew += n;
-        perForm.push({ form: form.name, found: raw.length, inserted: n });
+        perCampaign.push({ campaign: campaign.name, ads: ads.length, found, inserted: n });
       } catch (err) {
-        perForm.push({
-          form: form.name,
+        perCampaign.push({
+          campaign: campaign.name,
+          ads: 0,
           found: 0,
           inserted: 0,
           error: err instanceof Error ? err.message : String(err),
@@ -105,7 +144,7 @@ export async function GET(req: NextRequest) {
         .from("sync_runs")
         .update({
           finished_at: new Date().toISOString(),
-          forms_seen: formsSeen,
+          forms_seen: adsSeen,
           leads_found: leadsFound,
           leads_new: leadsNew,
           ok: true,
@@ -113,7 +152,16 @@ export async function GET(req: NextRequest) {
         .eq("id", run.id);
     }
 
-    return NextResponse.json({ ok: true, formsSeen, leadsFound, leadsNew, perForm });
+    return NextResponse.json({
+      ok: true,
+      cutoff,
+      campaignsTotal: states.length,
+      campaignsTracked: tracked.length,
+      adsSeen,
+      leadsFound,
+      leadsNew,
+      perCampaign,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (run?.id) {

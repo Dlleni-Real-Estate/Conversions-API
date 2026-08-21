@@ -231,3 +231,103 @@ export function normalizeEgyptPhone(raw?: string): string | undefined {
   if (d.length === 10 && d.startsWith("1")) return `20${d}`;
   return d;
 }
+
+// ── Campaigns / ads (System-User token, NOT the Page token) ─────────────────
+//
+// Leads are pulled by walking campaign → ads → /{ad-id}/leads instead of
+// sweeping every form on the Page. Two reasons:
+//   1. It is the only way to scope the pull to specific campaigns — a lead form
+//      is not owned by a campaign, the same form can run under several.
+//   2. It is far cheaper: one call per tracked campaign plus one per ad, versus
+//      one call per form on the Page (78 and counting).
+//
+// The walk also hands us campaign/adset/ad names for free, so we do not depend
+// on Meta echoing them back on the lead object.
+
+export type Campaign = {
+  id: string;
+  name: string;
+  created_time: string;
+  status?: string;
+  effective_status?: string;
+  objective?: string;
+};
+
+export async function listCampaigns(): Promise<Campaign[]> {
+  const { token, adAccountId } = metaConfig();
+  const out: Campaign[] = [];
+  let after: string | undefined;
+
+  do {
+    const page: { data: Campaign[]; paging?: { cursors?: { after?: string }; next?: string } } =
+      await graph(
+        `/act_${adAccountId}/campaigns`,
+        {
+          fields: "id,name,created_time,status,effective_status,objective",
+          limit: "200",
+          ...(after ? { after } : {}),
+        },
+        token
+      );
+    out.push(...(page.data || []));
+    after = page.paging?.next ? page.paging?.cursors?.after : undefined;
+  } while (after);
+
+  out.sort((a, b) => (a.created_time < b.created_time ? 1 : -1));
+  return out;
+}
+
+export type CampaignAd = { id: string; name: string; adset_id?: string; adset_name?: string };
+
+/**
+ * Ads under a campaign. Meta hides DELETED/ARCHIVED ads on this edge, so leads
+ * that only ever belonged to a deleted ad will not be picked up — acceptable,
+ * since a deleted ad is not a campaign anyone is still optimising.
+ */
+export async function listCampaignAds(campaignId: string): Promise<CampaignAd[]> {
+  const { token } = metaConfig();
+  const out: CampaignAd[] = [];
+  let after: string | undefined;
+
+  type Row = { id: string; name: string; adset_id?: string; adset?: { id?: string; name?: string } };
+
+  do {
+    const page: { data: Row[]; paging?: { cursors?: { after?: string }; next?: string } } = await graph(
+      `/${campaignId}/ads`,
+      { fields: "id,name,adset_id,adset{id,name}", limit: "200", ...(after ? { after } : {}) },
+      token
+    );
+    for (const r of page.data || []) {
+      out.push({ id: r.id, name: r.name, adset_id: r.adset_id ?? r.adset?.id, adset_name: r.adset?.name });
+    }
+    after = page.paging?.next ? page.paging?.cursors?.after : undefined;
+  } while (after);
+
+  return out;
+}
+
+/** Leads for one ad. Page-scoped edge, so it needs the Page token like forms do. */
+export async function fetchAdLeads(adId: string, since?: number): Promise<RawLead[]> {
+  const pageToken = await getPageToken();
+  const out: RawLead[] = [];
+  let after: string | undefined;
+
+  do {
+    const page: { data: RawLead[]; paging?: { cursors?: { after?: string }; next?: string } } = await graph(
+      `/${adId}/leads`,
+      {
+        fields: LEAD_FIELDS,
+        limit: "100",
+        ...(since
+          ? { filtering: JSON.stringify([{ field: "time_created", operator: "GREATER_THAN", value: since }]) }
+          : {}),
+        ...(after ? { after } : {}),
+      },
+      pageToken
+    );
+    out.push(...(page.data || []));
+    after = page.paging?.next ? page.paging?.cursors?.after : undefined;
+  } while (after);
+
+  return out;
+}
