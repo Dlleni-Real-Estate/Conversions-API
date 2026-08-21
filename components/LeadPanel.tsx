@@ -130,16 +130,16 @@ export default function LeadPanel({
     <div className="fixed inset-0 z-40 flex justify-end">
       <div className="absolute inset-0 bg-slate-900/30 backdrop-blur-[2px]" onClick={onClose} />
 
-      <aside className="relative z-10 flex h-full w-full max-w-xl flex-col overflow-y-auto border-s border-slate-200 bg-white shadow-panel">
+      <aside className="relative z-10 flex h-full w-full flex-col overflow-y-auto bg-white shadow-panel md:max-w-xl md:border-s md:border-slate-200">
         <header className="sticky top-0 z-10 border-b border-slate-100 bg-white/95 px-6 py-4 backdrop-blur">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <h2 className="text-lg font-semibold">{lead.full_name || t.unnamed}</h2>
+              <h2 dir="auto" className="text-lg font-semibold">{lead.full_name || t.unnamed}</h2>
               <p className="mt-0.5 text-xs text-slate-500">
                 {fmtDate(lead.submitted_at, locale)} · {fmtAgo(lead.submitted_at, lang)}
               </p>
             </div>
-            <button onClick={onClose} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100" aria-label={t.close}>
+            <button onClick={onClose} className="tap -me-1.5 rounded-lg px-2.5 text-lg text-slate-400 hover:bg-slate-100" aria-label={t.close}>
               ✕
             </button>
           </div>
@@ -152,13 +152,13 @@ export default function LeadPanel({
                   href={`https://wa.me/${lead.phone}`}
                   target="_blank"
                   rel="noreferrer"
-                  className="rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
+                  className="tap flex items-center rounded-lg border border-emerald-300 bg-emerald-50 px-3 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
                 >
                   {t.whatsapp} <span dir="ltr">{lead.phone}</span>
                 </a>
                 <a
                   href={`tel:+${lead.phone}`}
-                  className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
+                  className="tap flex items-center rounded-lg border border-slate-300 px-3 text-xs font-semibold text-slate-600 hover:bg-slate-50"
                 >
                   {t.call}
                 </a>
@@ -177,7 +177,7 @@ export default function LeadPanel({
                   disabled={busy || st.status === lead.status}
                   onClick={() => move(st.status)}
                   title={st.event ? t.sendsToMeta(st.event) : t.staysInternal}
-                  className={`rounded-lg border px-2.5 py-1.5 text-xs font-medium transition disabled:opacity-40 ${
+                  className={`tap rounded-lg border px-3 py-1.5 text-xs font-medium transition disabled:opacity-40 ${
                     st.status === lead.status ? st.color : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
                   }`}
                 >
@@ -196,13 +196,13 @@ export default function LeadPanel({
               onChange={(e) => setDraft(e.target.value)}
               rows={3}
               placeholder={t.notePlaceholder}
-              className="mt-2 w-full resize-y rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-900"
+              className="mt-2 w-full resize-y rounded-xl border border-slate-300 px-3 py-2 text-base outline-none focus:border-brand-500 sm:text-sm"
             />
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <button
                 onClick={addNote}
                 disabled={busy || !draft.trim()}
-                className="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-800 disabled:opacity-40"
+                className="tap rounded-lg bg-brand-600 px-4 text-xs font-semibold text-white hover:bg-brand-700 disabled:opacity-40"
               >
                 {t.saveNote}
               </button>
@@ -217,9 +217,9 @@ export default function LeadPanel({
               <h3 className="text-[11px] font-medium uppercase tracking-wide text-slate-500">{t.formAnswers}</h3>
               <dl className="mt-2 divide-y divide-slate-200 rounded-xl border border-slate-200 bg-slate-50/60">
                 {answers.map(([k, v]) => (
-                  <div key={k} className="flex gap-4 px-3 py-2 text-sm">
-                    <dt className="w-2/5 shrink-0 text-slate-500">{questionLabel(dictionary, k)}</dt>
-                    <dd className="font-medium text-slate-800">{answerLabel(dictionary, k, v)}</dd>
+                  <div key={k} className="flex flex-col gap-0.5 px-3 py-2 text-sm sm:flex-row sm:gap-4">
+                    <dt className="text-xs text-slate-500 sm:w-2/5 sm:shrink-0 sm:text-sm">{questionLabel(dictionary, k)}</dt>
+                    <dd dir="auto" className="font-medium text-slate-800">{answerLabel(dictionary, k, v)}</dd>
                   </div>
                 ))}
               </dl>
@@ -236,9 +236,9 @@ export default function LeadPanel({
                 [t.form, lead.form_name],
                 [t.platform, lead.platform],
               ].map(([k, v]) => (
-                <div key={k as string} className="flex gap-4 px-3 py-2">
-                  <dt className="w-2/5 shrink-0 text-slate-500">{k}</dt>
-                  <dd className="text-slate-800">{v || "—"}</dd>
+                <div key={k as string} className="flex flex-col gap-0.5 px-3 py-2 sm:flex-row sm:gap-4">
+                  <dt className="text-xs text-slate-500 sm:w-2/5 sm:shrink-0 sm:text-sm">{k}</dt>
+                  <dd dir="auto" className="text-slate-800">{v || "—"}</dd>
                 </div>
               ))}
             </dl>
@@ -266,7 +266,7 @@ export default function LeadPanel({
                         <span className="font-medium">{s(n.to_status)}</span>
                       </div>
                     )}
-                    {n.body && <p className="mt-0.5 whitespace-pre-wrap text-sm text-slate-700">{n.body}</p>}
+                    {n.body && <p dir="auto" className="mt-0.5 whitespace-pre-wrap text-sm text-slate-700">{n.body}</p>}
                   </li>
                 ))}
               </ol>

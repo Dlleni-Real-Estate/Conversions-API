@@ -68,7 +68,7 @@ export default function NoteCell({
 
   if (open) {
     return (
-      <div onClick={(e) => e.stopPropagation()} className="min-w-[15rem]">
+      <div onClick={(e) => e.stopPropagation()} className="w-full sm:min-w-[15rem]">
         <textarea
           ref={ref}
           rows={2}
@@ -86,7 +86,7 @@ export default function NoteCell({
             }
           }}
           placeholder={t.notePlaceholder}
-          className="w-full resize-y rounded-lg border border-slate-400 bg-white px-2.5 py-1.5 text-xs outline-none focus:border-slate-900"
+          className="w-full resize-y rounded-lg border border-slate-400 bg-white px-2.5 py-2 text-base outline-none focus:border-brand-500 sm:text-xs"
         />
         <div className="mt-0.5 text-[10px] text-slate-400">
           {state === "saving" ? t.saving : t.autosaveHint}
@@ -103,7 +103,7 @@ export default function NoteCell({
           e.stopPropagation();
           setOpen(true);
         }}
-        className="note-empty min-h-[2.25rem] w-full min-w-[13rem] rounded-lg border px-2.5 py-1.5 text-start text-xs text-slate-400 transition"
+        className="note-empty tap min-h-[2.25rem] w-full rounded-lg border px-2.5 py-1.5 text-start text-xs text-slate-400 transition sm:min-w-[13rem]"
       >
         {state === "saved" ? `✓ ${t.saved}` : t.notePlaceholder}
       </button>
@@ -112,9 +112,9 @@ export default function NoteCell({
 
   // Has notes: solid box, plus a + for the next one.
   return (
-    <div className="flex min-w-[13rem] items-stretch gap-1.5">
+    <div className="flex items-stretch gap-1.5 sm:min-w-[13rem]">
       <div className="note-filled min-w-0 flex-1 rounded-lg border px-2.5 py-1.5">
-        <div className="line-clamp-2 text-xs text-slate-700">{lastNote}</div>
+        <div dir="auto" className="line-clamp-2 text-xs text-slate-700">{lastNote}</div>
         {count > 1 && <div className="mt-0.5 text-[10px] text-slate-400">{t.notesCount(count)}</div>}
       </div>
       <button
@@ -124,7 +124,7 @@ export default function NoteCell({
         }}
         title={t.addNote}
         aria-label={t.addNote}
-        className="shrink-0 rounded-lg border border-slate-300 bg-white px-2 text-base leading-none text-slate-500 transition hover:border-slate-500 hover:text-slate-900"
+        className="tap shrink-0 rounded-lg border border-slate-300 bg-white px-3 text-lg leading-none text-slate-500 transition hover:border-brand-500 hover:text-brand-600"
       >
         +
       </button>

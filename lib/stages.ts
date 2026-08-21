@@ -39,9 +39,11 @@ export type StageDef = {
   rank: number;
   /** true = the algorithm should seek this, false = avoid, null = neutral. */
   positive: boolean | null;
-  /** Badge styling. */
+  /** Badge styling — background, text and border together. */
   color: string;
-  /** Accent used by the funnel and charts. */
+  /** Very light tint, for the surface of a card in this stage. */
+  soft: string;
+  /** Accent used by bars, dots and the edge stripe on a row. */
   accent: string;
   hint?: string;
   hintAr?: string;
@@ -55,7 +57,8 @@ export const STAGES: StageDef[] = [
     event: null,
     rank: 0,
     positive: null,
-    color: "bg-slate-100 text-slate-600 border-slate-200",
+    color: "bg-slate-100 text-slate-600 border-slate-300",
+    soft: "bg-slate-50",
     accent: "#94a3b8",
     hint: "Nobody has touched this lead yet",
     hintAr: "لسه محدش مسكه",
@@ -67,8 +70,9 @@ export const STAGES: StageDef[] = [
     event: "Contacted",
     rank: 1,
     positive: null,
-    color: "bg-sky-50 text-sky-700 border-sky-200",
-    accent: "#0ea5e9",
+    color: "bg-sky-50 text-sky-800 border-sky-300",
+    soft: "bg-sky-50/60",
+    accent: "#0284c7",
     hint: "Reached them on the phone",
     hintAr: "كلّمناه على التليفون",
   },
@@ -79,8 +83,9 @@ export const STAGES: StageDef[] = [
     event: "NoAnswer",
     rank: -1,
     positive: false,
-    color: "bg-amber-50 text-amber-800 border-amber-200",
-    accent: "#f59e0b",
+    color: "bg-orange-50 text-orange-800 border-orange-300",
+    soft: "bg-orange-50/60",
+    accent: "#f97316",
     hint: "Called, nobody picked up",
     hintAr: "اتصلنا وما ردّش",
   },
@@ -91,8 +96,9 @@ export const STAGES: StageDef[] = [
     event: "Qualified",
     rank: 2,
     positive: true,
-    color: "bg-emerald-50 text-emerald-700 border-emerald-200",
-    accent: "#10b981",
+    color: "bg-violet-50 text-violet-800 border-violet-300",
+    soft: "bg-violet-50/60",
+    accent: "#7c3aed",
     hint: "Real budget, real intent",
     hintAr: "عنده ميزانية ونيّة شراء",
   },
@@ -103,8 +109,9 @@ export const STAGES: StageDef[] = [
     event: "MeetingBooked",
     rank: 3,
     positive: true,
-    color: "bg-violet-50 text-violet-700 border-violet-200",
-    accent: "#8b5cf6",
+    color: "bg-fuchsia-50 text-fuchsia-800 border-fuchsia-300",
+    soft: "bg-fuchsia-50/60",
+    accent: "#d946ef",
   },
   {
     status: "meeting_done",
@@ -113,8 +120,9 @@ export const STAGES: StageDef[] = [
     event: "MeetingDone",
     rank: 4,
     positive: true,
-    color: "bg-violet-100 text-violet-800 border-violet-300",
-    accent: "#7c3aed",
+    color: "bg-fuchsia-100 text-fuchsia-900 border-fuchsia-400",
+    soft: "bg-fuchsia-50",
+    accent: "#a21caf",
   },
   {
     status: "site_visit_booked",
@@ -123,8 +131,9 @@ export const STAGES: StageDef[] = [
     event: "SiteVisitBooked",
     rank: 5,
     positive: true,
-    color: "bg-indigo-50 text-indigo-700 border-indigo-200",
-    accent: "#6366f1",
+    color: "bg-cyan-50 text-cyan-800 border-cyan-300",
+    soft: "bg-cyan-50/60",
+    accent: "#06b6d4",
   },
   {
     status: "site_visit_done",
@@ -133,8 +142,9 @@ export const STAGES: StageDef[] = [
     event: "SiteVisitDone",
     rank: 6,
     positive: true,
-    color: "bg-indigo-100 text-indigo-800 border-indigo-300",
-    accent: "#4f46e5",
+    color: "bg-cyan-100 text-cyan-900 border-cyan-400",
+    soft: "bg-cyan-50",
+    accent: "#0e7490",
   },
   {
     status: "eoi",
@@ -143,8 +153,9 @@ export const STAGES: StageDef[] = [
     event: "EOI",
     rank: 7,
     positive: true,
-    color: "bg-teal-100 text-teal-800 border-teal-300",
-    accent: "#0d9488",
+    color: "bg-amber-100 text-amber-900 border-amber-400",
+    soft: "bg-amber-50",
+    accent: "#b45309",
     hint: "Expression of interest signed",
     hintAr: "وقّع خطاب إبداء الرغبة",
   },
@@ -155,8 +166,9 @@ export const STAGES: StageDef[] = [
     event: "Reservation",
     rank: 8,
     positive: true,
-    color: "bg-green-600 text-white border-green-700",
-    accent: "#16a34a",
+    color: "bg-emerald-600 text-white border-emerald-700",
+    soft: "bg-emerald-50",
+    accent: "#059669",
     hint: "Money down — the outcome everything else is trying to predict",
     hintAr: "دفع — ده الهدف اللي كل حاجة تانية بتحاول تتنبأ بيه",
   },
@@ -167,8 +179,9 @@ export const STAGES: StageDef[] = [
     event: "Disqualified",
     rank: -2,
     positive: false,
-    color: "bg-red-50 text-red-700 border-red-200",
-    accent: "#ef4444",
+    color: "bg-red-50 text-red-800 border-red-300",
+    soft: "bg-red-50/60",
+    accent: "#dc2626",
     hint: "Wrong number, no budget, not interested",
     hintAr: "رقم غلط، مفيش ميزانية، مش مهتم",
   },
@@ -189,6 +202,13 @@ export const FUNNEL: Status[] = [
   "eoi",
   "reservation",
 ];
+
+/**
+ * The moves a broker reaches for most, in order. On a phone these become big
+ * buttons instead of a dropdown, because a 10-item select on a touch screen is
+ * where speed goes to die.
+ */
+export const QUICK_MOVES: Status[] = ["contacted", "no_answer", "qualified", "disqualified"];
 
 /** Stages a broker can move a lead into (everything except the initial state). */
 export const ACTIONABLE: Status[] = STAGES.filter((s) => s.status !== "new").map((s) => s.status);

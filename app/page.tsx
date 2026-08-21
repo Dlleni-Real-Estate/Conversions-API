@@ -136,17 +136,21 @@ function Dashboard() {
   }
 
   const campaignOptions = analytics?.campaigns ?? [];
+  // Leads nobody has called yet. Surfaced on the tab so it is visible from any
+  // screen — a queue you cannot see is a queue nobody works.
+  const untouched = leads.filter((l) => l.status === "new").length;
 
   return (
     <div className="min-h-screen">
       {/* A real chrome bar. Without it the page is one uninterrupted sheet of
           white and nothing tells you where the app ends and the data begins. */}
-      <div className="sticky top-0 z-30 border-b border-slate-200 bg-white/90 shadow-card backdrop-blur">
-        <div className="mx-auto max-w-[1600px] px-6 pt-4">
-          <header className="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <h1 className="text-lg font-semibold tracking-tight">{t.appTitle}</h1>
-              <p className="mt-0.5 max-w-2xl text-xs text-slate-500">{t.appTagline}</p>
+      <div className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 shadow-card backdrop-blur">
+        <span className="block h-1 bg-gradient-to-r from-brand-600 via-brand-500 to-emerald-500" aria-hidden />
+        <div className="mx-auto max-w-[1600px] px-4 pt-3 sm:px-6 sm:pt-4">
+          <header className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <h1 className="text-base font-semibold tracking-tight sm:text-lg">{t.appTitle}</h1>
+              <p className="mt-0.5 hidden max-w-2xl text-xs text-slate-500 sm:block">{t.appTagline}</p>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
@@ -155,7 +159,7 @@ function Dashboard() {
                 <select
                   value={scope}
                   onChange={(e) => setScope(e.target.value)}
-                  className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs shadow-card"
+                  className="tap max-w-[10rem] rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs shadow-card sm:max-w-none"
                 >
                   <option value="all">{t.allCampaigns}</option>
                   {campaignOptions.map((c) => (
@@ -168,7 +172,7 @@ function Dashboard() {
               <button
                 onClick={() => load()}
                 disabled={loading}
-                className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium shadow-card hover:bg-slate-50 disabled:opacity-40"
+                className="tap rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium shadow-card hover:bg-slate-50 disabled:opacity-40"
                 title={t.refreshHint}
               >
                 {loading ? t.refreshing : t.refresh}
@@ -176,21 +180,26 @@ function Dashboard() {
             </div>
           </header>
 
-          <nav className="mt-3 flex items-center gap-1">
+          <nav className="mt-2 flex items-center gap-1 overflow-x-auto sm:mt-3">
             {TABS.map((tb) => (
               <button
                 key={tb.id}
                 onClick={() => setTab(tb.id)}
-                className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium transition ${
+                className={`tap -mb-px flex shrink-0 items-center gap-1.5 border-b-2 px-3 text-sm font-medium transition ${
                   tab === tb.id
-                    ? "border-slate-900 text-slate-900"
+                    ? "border-brand-600 text-brand-700"
                     : "border-transparent text-slate-500 hover:text-slate-800"
                 }`}
               >
                 {t[tb.tk]}
+                {tb.id === "pipeline" && untouched > 0 && (
+                  <span className="rounded-full bg-orange-500 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
+                    {untouched}
+                  </span>
+                )}
               </button>
             ))}
-            <span className="ms-auto pb-2 text-[11px] text-slate-400">
+            <span className="ms-auto hidden shrink-0 pb-2 text-[11px] text-slate-400 sm:block">
               {lastLoaded
                 ? `${t.updated} ${lastLoaded.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit", numberingSystem: "latn" })}`
                 : ""}
@@ -199,7 +208,7 @@ function Dashboard() {
         </div>
       </div>
 
-      <main className="mx-auto max-w-[1600px] px-6 py-6">
+      <main className="mx-auto max-w-[1600px] px-4 py-5 sm:px-6 sm:py-6">
         {err && (
           <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">{err}</div>
         )}

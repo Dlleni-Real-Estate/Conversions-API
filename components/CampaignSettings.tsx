@@ -128,7 +128,7 @@ export default function CampaignSettings({ pw }: { pw: string }) {
                 return (
                   <tr key={c.id} className={c.tracked ? "" : "text-slate-400"}>
                     <Td>
-                      <div className={c.tracked ? "font-medium text-slate-900" : ""}>{c.name}</div>
+                      <div dir="auto" className={c.tracked ? "font-medium text-slate-900" : ""}>{c.name}</div>
                       <div className="text-[11px] text-slate-400">{c.id}</div>
                     </Td>
                     <Td>

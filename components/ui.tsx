@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
 // ── Formatting ──────────────────────────────────────────────────────────────
 // One place, so a number never renders two different ways on two screens.
@@ -162,14 +162,16 @@ export function Columns({
   data,
   height = 120,
   secondaryLabel = "qual.",
+  className = "",
 }: {
   data: { label: string; value: number; secondary?: number }[];
   height?: number;
   secondaryLabel?: string;
+  className?: string;
 }) {
   const max = Math.max(1, ...data.map((d) => d.value));
   return (
-    <div className="flex items-end gap-1.5 overflow-x-auto px-1" style={{ height }}>
+    <div className={`flex items-end gap-1.5 overflow-x-auto px-1 ${className}`} style={{ height }}>
       {data.map((d, i) => (
         <div key={i} className="group flex min-w-[26px] flex-1 flex-col items-center justify-end gap-1">
           <div className="relative w-full">
@@ -192,6 +194,43 @@ export function Columns({
         </div>
       ))}
     </div>
+  );
+}
+
+/**
+ * A block of metrics. On a phone only the headline few are shown — nineteen
+ * tiles stacked two-wide is ten screens of scrolling before you reach anything
+ * you can act on — and the rest sit behind one tap.
+ */
+export function MetricGrid({
+  core,
+  more,
+  moreLabel,
+  lessLabel,
+}: {
+  core: ReactNode;
+  more?: ReactNode;
+  moreLabel: string;
+  lessLabel: string;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <div className="grid grid-cols-2 gap-2.5 sm:gap-3 lg:grid-cols-4 xl:grid-cols-6">{core}</div>
+      {more && (
+        <>
+          <div className={`${open ? "grid" : "hidden"} mt-2.5 grid-cols-2 gap-2.5 sm:!grid sm:gap-3 lg:grid-cols-4 xl:grid-cols-6`}>
+            {more}
+          </div>
+          <button
+            onClick={() => setOpen((v) => !v)}
+            className="tap mt-2 w-full rounded-xl border border-slate-300 bg-white text-xs font-medium text-slate-600 shadow-card sm:hidden"
+          >
+            {open ? lessLabel : moreLabel}
+          </button>
+        </>
+      )}
+    </>
   );
 }
 
