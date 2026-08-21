@@ -329,14 +329,18 @@ async function sendMissingStageEvents(
 ): Promise<number> {
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 3600_000).toISOString();
 
-  const { data: recent } = await db
+  const { data: recent, error: leadErr } = await db
     .from("leads")
     .select("lead_id, phone, email, status, deal_value")
     .gte("submitted_at", sevenDaysAgo)
     .order("submitted_at", { ascending: false })
     .limit(limit);
 
-  if (!recent || recent.length === 0) return 0;
+  if (leadErr) console.error("[sync] stage sweep: lead query failed —", leadErr.message);
+  if (!recent || recent.length === 0) {
+    console.log(`[sync] stage sweep: no leads submitted since ${sevenDaysAgo}`);
+    return 0;
+  }
 
   const leadIds = recent.map((l: { lead_id: string }) => l.lead_id);
 
@@ -384,6 +388,13 @@ async function sendMissingStageEvents(
     });
   }
 
+  // Logged before the early return, so "nothing to send" and "nothing sendable"
+  // are distinguishable from the outside. Chasing that difference without this
+  // line costs a deploy cycle.
+  console.log(
+    `[sync] stage sweep: leads=${recent.length} alreadySent=${done.size} missing=${missing.length}` +
+      (missing[0] ? ` first=${capiEventId(missing[0].leadId, missing[0].eventName)}` : "")
+  );
   if (missing.length === 0) return 0;
 
   const result = await sendLeadEvents(missing).catch((err) => {
