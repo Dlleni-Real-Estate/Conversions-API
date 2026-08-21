@@ -414,6 +414,58 @@ function costPerLead(rows?: { action_type: string; value: string }[]): number | 
   return null;
 }
 
+export type CampaignInsight = Omit<AdInsight, "ad_id" | "ad_name" | "adset_id" | "adset_name"> & {
+  campaign_id: string;
+  campaign_name?: string;
+};
+
+/**
+ * Meta's own campaign-level numbers, taken verbatim.
+ *
+ * Do NOT compute these by adding up the ad rows. Reach is deduplicated people:
+ * one person who saw two ads is one reach at campaign level and two if you
+ * add. Spend and impressions can also differ slightly, because attribution is
+ * applied per level. When the dashboard and Ads Manager disagree, the reason is
+ * almost always that someone added something Meta had already deduplicated.
+ */
+export async function fetchCampaignInsights(campaignId: string): Promise<CampaignInsight | null> {
+  const { token } = metaConfig();
+  const page: { data: InsightRow[] } = await graph(
+    `/${campaignId}/insights`,
+    {
+      level: "campaign",
+      date_preset: "maximum",
+      limit: "1",
+      fields:
+        "campaign_id,campaign_name,spend,impressions,reach,frequency,clicks,inline_link_clicks," +
+        "ctr,cpc,cpm,actions,cost_per_action_type,account_currency",
+    },
+    token
+  );
+
+  const r = page.data?.[0];
+  if (!r) return null;
+
+  return {
+    campaign_id: r.campaign_id ?? campaignId,
+    campaign_name: r.campaign_name,
+    spend: num(r.spend),
+    impressions: num(r.impressions),
+    reach: num(r.reach),
+    frequency: num(r.frequency),
+    clicks: num(r.clicks),
+    link_clicks: num(r.inline_link_clicks),
+    ctr: num(r.ctr),
+    cpc: num(r.cpc),
+    cpm: num(r.cpm),
+    meta_leads: leadCount(r.actions),
+    cost_per_lead: costPerLead(r.cost_per_action_type),
+    currency: r.account_currency,
+    date_start: r.date_start,
+    date_stop: r.date_stop,
+  };
+}
+
 export async function fetchCampaignAdInsights(campaignId: string): Promise<AdInsight[]> {
   const { token } = metaConfig();
   const out: AdInsight[] = [];

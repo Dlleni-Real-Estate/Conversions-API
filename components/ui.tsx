@@ -67,9 +67,11 @@ export function Card({
   className?: string;
 }) {
   return (
-    <section className={`rounded-2xl border border-slate-200 bg-white ${className}`}>
+    // A visible edge and a real shadow: on a light page, a white card with a
+    // hairline border alone disappears.
+    <section className={`overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-card ${className}`}>
       {(title || right) && (
-        <header className="flex items-start justify-between gap-4 border-b border-slate-100 px-5 py-4">
+        <header className="flex items-start justify-between gap-4 border-b border-slate-200 bg-slate-50 px-5 py-3.5">
           <div>
             {title && <h2 className="text-sm font-semibold tracking-tight text-slate-900">{title}</h2>}
             {subtitle && <p className="mt-0.5 text-xs text-slate-500">{subtitle}</p>}
@@ -82,16 +84,42 @@ export function Card({
   );
 }
 
+/** Heading above a group of cards or tiles. */
+export function SectionTitle({
+  title,
+  subtitle,
+  accent = "#0f172a",
+  right,
+}: {
+  title: string;
+  subtitle?: string;
+  accent?: string;
+  right?: ReactNode;
+}) {
+  return (
+    <div className="mb-2.5 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+      <span className="inline-flex items-baseline gap-2">
+        <span className="h-3 w-1 translate-y-[1px] rounded-full" style={{ background: accent }} />
+        <h2 className="text-sm font-semibold tracking-tight text-slate-900">{title}</h2>
+      </span>
+      {subtitle && <span className="text-xs text-slate-500">{subtitle}</span>}
+      {right}
+    </div>
+  );
+}
+
 export function Stat({
   label,
   value,
   sub,
   tone = "default",
+  accent,
 }: {
   label: string;
   value: string;
   sub?: string;
   tone?: "default" | "good" | "bad" | "muted";
+  accent?: string;
 }) {
   const toneClass = {
     default: "text-slate-900",
@@ -100,10 +128,11 @@ export function Stat({
     muted: "text-slate-400",
   }[tone];
   return (
-    <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+    <div className="relative overflow-hidden rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-card">
+      {accent && <span className="absolute inset-x-0 top-0 h-[3px]" style={{ background: accent }} />}
       <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">{label}</div>
       <div className={`mt-1 text-xl font-semibold tabular-nums ${toneClass}`}>{value}</div>
-      {sub && <div className="mt-0.5 text-xs text-slate-400">{sub}</div>}
+      {sub && <div className="mt-0.5 text-xs leading-snug text-slate-400">{sub}</div>}
     </div>
   );
 }
@@ -171,7 +200,7 @@ export function Th({ children, align = "left" }: { children: ReactNode; align?: 
     // Logical alignment (start/end), so the whole table mirrors in Arabic
     // without a second set of styles.
     <th
-      className={`whitespace-nowrap px-3 py-2.5 text-[11px] font-medium uppercase tracking-wide text-slate-500 ${
+      className={`whitespace-nowrap px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-600 ${
         align === "right" ? "text-end" : "text-start"
       }`}
     >

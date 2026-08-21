@@ -56,7 +56,8 @@ Default cutoff: **1 Aug 2026**. Change it in the Settings tab.
 
 **Analytics**
 
-- **Money first** — spend, cost per lead, cost per qualified, cost per site visit, cost per reservation
+- **Reported by Meta** — spend, reach, impressions, frequency, clicks, CTR, CPM, CPC, Meta's own lead count and cost per lead, **verbatim**, with the window Meta has actually counted. Nothing in this block is derived from our lead table, and **reach is never added across campaigns** — it counts people, and Meta deduplicates it only within a campaign, so with more than one campaign in scope it shows `—` rather than a number that looks right and is not.
+- **Your pipeline** — the same spend, divided by *our* counts: cost per lead, per qualified, per site visit, per reservation. Our lead count is exact and immediate; Meta's lags a day and applies attribution windows. They are shown side by side rather than blended.
 - **Funnel** — each step counts every lead that reached it *or went past it*, with the drop-off from the previous step
 - **Ad performance** — reach, impressions, frequency, CTR, CPM alongside leads, qualified %, no-show %, reservations and cost per stage. Sortable on every column.
 - **Leads per day** with the qualified share

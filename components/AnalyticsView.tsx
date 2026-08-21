@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { STAGES, STAGE_BY_STATUS, type Status } from "@/lib/stages";
-import { Bar, Card, Columns, Empty, Stat, Td, Th, fmtDay, fmtInt, fmtMoney, fmtMoney2, fmtPct } from "./ui";
+import { Bar, Card, Columns, Empty, SectionTitle, Stat, Td, Th, fmtDay, fmtInt, fmtMoney, fmtMoney2, fmtPct } from "./ui";
 import { useLang } from "./LangProvider";
 import type { Analytics, AdRow } from "./types";
 
@@ -18,6 +18,8 @@ const AD_COLUMNS: { key: SortKey; tk: keyof ReturnType<typeof useLang>["t"]; kin
   { key: "frequency", tk: "tFreq", kind: "num" },
   { key: "ctr", tk: "tCtr", kind: "pct" },
   { key: "cpm", tk: "tCpm", kind: "money2" },
+  { key: "meta_leads", tk: "tMetaLeads", kind: "int" },
+  { key: "meta_cost_per_lead", tk: "tMetaCostLead", kind: "money2" },
   { key: "leads", tk: "tLeads", kind: "int" },
   { key: "cost_per_lead", tk: "tCostLead", kind: "money2" },
   { key: "qualified", tk: "tQual", kind: "int" },
@@ -32,7 +34,7 @@ const AD_COLUMNS: { key: SortKey; tk: keyof ReturnType<typeof useLang>["t"]; kin
 export default function AnalyticsView({ data }: { data: Analytics }) {
   const { t, s: stageName, locale } = useLang();
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "spend", dir: -1 });
-  const { kpis, currency } = data;
+  const { kpis, meta, currency } = data;
 
   const ads = useMemo(() => {
     const rows = [...(data.ads || [])];
@@ -58,43 +60,90 @@ export default function AnalyticsView({ data }: { data: Analytics }) {
 
   return (
     <div className="space-y-6">
-      {/* ── Money first: these are the numbers that decide budget ─────────── */}
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 xl:grid-cols-6">
-        <Stat label={t.spend} value={fmtMoney(kpis.spend, currency)} sub={`${fmtInt(kpis.reach)} ${t.reached}`} />
-        <Stat label={t.leads} value={fmtInt(kpis.leads)} sub={`${fmtInt(kpis.untouched)} ${t.untouched}`} />
-        <Stat label={t.costPerLead} value={fmtMoney2(kpis.cost_per_lead, currency)} />
-        <Stat
-          label={t.qualified}
-          value={fmtInt(kpis.qualified)}
-          sub={`${fmtPct(kpis.qualified_pct)} ${t.ofLeads}`}
-          tone="good"
+      {/* ── Meta's own numbers, verbatim ──────────────────────────────────
+          Nothing in this block is computed from our lead table. Reach in
+          particular is never added across campaigns: it counts people, and Meta
+          has already deduplicated anyone who saw more than one ad. */}
+      <section>
+        <SectionTitle
+          title={t.fromMeta}
+          subtitle={t.fromMetaSub}
+          accent="#1877f2"
+          right={
+            meta.date_start && meta.date_stop ? (
+              <span className="rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+                {t.reportedThrough(fmtDay(meta.date_start, locale), fmtDay(meta.date_stop, locale))}
+              </span>
+            ) : undefined
+          }
         />
-        <Stat label={t.costPerQualified} value={fmtMoney2(kpis.cost_per_qualified, currency)} tone="good" />
-        <Stat
-          label={t.reservations}
-          value={fmtInt(kpis.reservations)}
-          sub={kpis.cost_per_reservation ? `${fmtMoney2(kpis.cost_per_reservation, currency)} ${t.each}` : undefined}
-          tone={kpis.reservations > 0 ? "good" : "muted"}
-        />
-      </div>
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 xl:grid-cols-6">
+          <Stat label={t.spend} value={fmtMoney(meta.spend, currency)} accent="#1877f2" />
+          <Stat
+            label={t.reached}
+            value={meta.reach === null ? "—" : fmtInt(meta.reach)}
+            sub={meta.reach === null ? t.reachAcrossCampaigns : undefined}
+            tone={meta.reach === null ? "muted" : "default"}
+          />
+          <Stat label={t.impressions} value={fmtInt(meta.impressions)} />
+          <Stat
+            label={t.frequency}
+            value={meta.frequency === null ? "—" : meta.frequency.toFixed(2)}
+            tone={meta.frequency === null ? "muted" : "default"}
+          />
+          <Stat
+            label={t.clicks}
+            value={fmtInt(meta.clicks)}
+            sub={`${fmtInt(meta.link_clicks)} ${t.linkClicks.toLowerCase()}`}
+          />
+          <Stat label={t.ctrSuffix} value={fmtPct(meta.ctr)} />
+          <Stat label={t.cpm} value={fmtMoney2(meta.cpm, currency)} />
+          <Stat label={t.cpc} value={fmtMoney2(meta.cpc, currency)} />
+          <Stat label={t.metaLeads} value={fmtInt(meta.leads)} />
+          <Stat label={t.costPerLead} value={fmtMoney2(meta.cost_per_lead, currency)} accent="#1877f2" />
+        </div>
+        <p className="mt-2 max-w-4xl text-[11px] leading-relaxed text-slate-400">{t.metaLagNote}</p>
+      </section>
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 xl:grid-cols-6">
-        <Stat label={t.impressions} value={fmtInt(kpis.impressions)} />
-        <Stat label={t.clicks} value={fmtInt(kpis.clicks)} sub={kpis.ctr ? `${kpis.ctr}% ${t.ctrSuffix}` : undefined} />
-        <Stat label={t.siteVisits} value={fmtInt(kpis.site_visits)} />
-        <Stat label={t.costPerSiteVisit} value={fmtMoney2(kpis.cost_per_site_visit, currency)} />
-        <Stat
-          label={t.medianResponse}
-          value={kpis.median_response_hours === null ? "—" : `${kpis.median_response_hours}h`}
-          sub={kpis.contacted_within_hour_pct === null ? undefined : t.withinHour(kpis.contacted_within_hour_pct)}
-          tone={kpis.median_response_hours !== null && kpis.median_response_hours > 4 ? "bad" : "default"}
-        />
-        <Stat
-          label={t.reservationValue}
-          value={kpis.reservation_value ? fmtMoney(kpis.reservation_value, currency) : "—"}
-          sub={kpis.roas ? t.onSpend(kpis.roas) : undefined}
-        />
-      </div>
+      {/* ── Our pipeline. Same spend, our counts. ─────────────────────────── */}
+      <section>
+        <SectionTitle title={t.yourPipeline} subtitle={t.yourPipelineSub} accent="#10b981" />
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 xl:grid-cols-6">
+          <Stat
+            label={t.crmLeads}
+            value={fmtInt(kpis.leads)}
+            sub={`${fmtInt(kpis.untouched)} ${t.untouched}`}
+            accent="#0ea5e9"
+          />
+          <Stat label={t.costPerLead} value={fmtMoney2(kpis.cost_per_lead, currency)} />
+          <Stat
+            label={t.qualified}
+            value={fmtInt(kpis.qualified)}
+            sub={`${fmtPct(kpis.qualified_pct)} ${t.ofLeads}`}
+            tone="good"
+          />
+          <Stat label={t.costPerQualified} value={fmtMoney2(kpis.cost_per_qualified, currency)} tone="good" accent="#10b981" />
+          <Stat label={t.siteVisits} value={fmtInt(kpis.site_visits)} />
+          <Stat label={t.costPerSiteVisit} value={fmtMoney2(kpis.cost_per_site_visit, currency)} />
+          <Stat
+            label={t.reservations}
+            value={fmtInt(kpis.reservations)}
+            sub={kpis.cost_per_reservation ? `${fmtMoney2(kpis.cost_per_reservation, currency)} ${t.each}` : undefined}
+            tone={kpis.reservations > 0 ? "good" : "muted"}
+          />
+          <Stat
+            label={t.reservationValue}
+            value={kpis.reservation_value ? fmtMoney(kpis.reservation_value, currency) : "—"}
+            sub={kpis.roas ? t.onSpend(kpis.roas) : undefined}
+          />
+          <Stat
+            label={t.medianResponse}
+            value={kpis.median_response_hours === null ? "—" : `${kpis.median_response_hours}h`}
+            sub={kpis.contacted_within_hour_pct === null ? undefined : t.withinHour(kpis.contacted_within_hour_pct)}
+            tone={kpis.median_response_hours !== null && kpis.median_response_hours > 4 ? "bad" : "default"}
+          />
+        </div>
+      </section>
 
       <div className="grid gap-6 xl:grid-cols-3">
         {/* ── Funnel ───────────────────────────────────────────────────────── */}
@@ -160,7 +209,7 @@ export default function AnalyticsView({ data }: { data: Analytics }) {
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="border-b border-slate-100 bg-slate-50/60">
+              <thead className="border-b border-slate-200 bg-slate-100">
                 <tr>
                   {AD_COLUMNS.map((c) => (
                     <Th key={c.key} align={c.kind === "text" ? "left" : "right"}>
@@ -177,9 +226,9 @@ export default function AnalyticsView({ data }: { data: Analytics }) {
                   ))}
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
+              <tbody className="divide-y divide-slate-200">
                 {ads.map((a) => (
-                  <tr key={a.ad_id} className="hover:bg-slate-50/60">
+                  <tr key={a.ad_id} className="even:bg-slate-50/70 hover:bg-sky-50">
                     {AD_COLUMNS.map((c) => {
                       const v = a[c.key];
                       if (c.kind === "text") {

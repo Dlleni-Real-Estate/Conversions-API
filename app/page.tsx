@@ -109,7 +109,7 @@ function Dashboard() {
             e.preventDefault();
             load(pw);
           }}
-          className="w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-8 shadow-sm"
+          className="w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-8 shadow-panel"
         >
           <div className="flex items-start justify-between gap-3">
             <div>
@@ -138,64 +138,73 @@ function Dashboard() {
   const campaignOptions = analytics?.campaigns ?? [];
 
   return (
-    <main className="mx-auto max-w-[1600px] px-6 py-6">
-      <header className="flex flex-wrap items-end justify-between gap-4">
+    <div className="min-h-screen">
+      {/* A real chrome bar. Without it the page is one uninterrupted sheet of
+          white and nothing tells you where the app ends and the data begins. */}
+      <div className="sticky top-0 z-30 border-b border-slate-200 bg-white/90 shadow-card backdrop-blur">
+        <div className="mx-auto max-w-[1600px] px-6 pt-4">
+          <header className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <h1 className="text-lg font-semibold tracking-tight">{t.appTitle}</h1>
+              <p className="mt-0.5 max-w-2xl text-xs text-slate-500">{t.appTagline}</p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <LangSwitch />
+              {campaignOptions.length > 1 && (
+                <select
+                  value={scope}
+                  onChange={(e) => setScope(e.target.value)}
+                  className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs shadow-card"
+                >
+                  <option value="all">{t.allCampaigns}</option>
+                  {campaignOptions.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <button
+                onClick={() => load()}
+                disabled={loading}
+                className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium shadow-card hover:bg-slate-50 disabled:opacity-40"
+                title={t.refreshHint}
+              >
+                {loading ? t.refreshing : t.refresh}
+              </button>
+            </div>
+          </header>
+
+          <nav className="mt-3 flex items-center gap-1">
+            {TABS.map((tb) => (
+              <button
+                key={tb.id}
+                onClick={() => setTab(tb.id)}
+                className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium transition ${
+                  tab === tb.id
+                    ? "border-slate-900 text-slate-900"
+                    : "border-transparent text-slate-500 hover:text-slate-800"
+                }`}
+              >
+                {t[tb.tk]}
+              </button>
+            ))}
+            <span className="ms-auto pb-2 text-[11px] text-slate-400">
+              {lastLoaded
+                ? `${t.updated} ${lastLoaded.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit", numberingSystem: "latn" })}`
+                : ""}
+            </span>
+          </nav>
+        </div>
+      </div>
+
+      <main className="mx-auto max-w-[1600px] px-6 py-6">
+        {err && (
+          <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">{err}</div>
+        )}
+
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">{t.appTitle}</h1>
-          <p className="mt-0.5 text-sm text-slate-500">{t.appTagline}</p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          <LangSwitch />
-          {campaignOptions.length > 1 && (
-            <select
-              value={scope}
-              onChange={(e) => setScope(e.target.value)}
-              className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs"
-            >
-              <option value="all">{t.allCampaigns}</option>
-              {campaignOptions.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-          )}
-          <button
-            onClick={() => load()}
-            disabled={loading}
-            className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium hover:bg-slate-50 disabled:opacity-40"
-            title={t.refreshHint}
-          >
-            {loading ? t.refreshing : t.refresh}
-          </button>
-        </div>
-      </header>
-
-      <nav className="mt-5 flex items-center gap-1 border-b border-slate-200">
-        {TABS.map((tb) => (
-          <button
-            key={tb.id}
-            onClick={() => setTab(tb.id)}
-            className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium transition ${
-              tab === tb.id ? "border-slate-900 text-slate-900" : "border-transparent text-slate-500 hover:text-slate-800"
-            }`}
-          >
-            {t[tb.tk]}
-          </button>
-        ))}
-        <span className="ms-auto pb-2 text-[11px] text-slate-400">
-          {lastLoaded
-            ? `${t.updated} ${lastLoaded.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit", numberingSystem: "latn" })}`
-            : ""}
-        </span>
-      </nav>
-
-      {err && (
-        <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">{err}</div>
-      )}
-
-      <div className="mt-6">
         {tab === "pipeline" && (
           <LeadsView
             leads={leads}
@@ -222,17 +231,18 @@ function Dashboard() {
           ))}
 
         {tab === "settings" && <CampaignSettings pw={pw} />}
-      </div>
+        </div>
 
-      {selected && (
-        <LeadPanel
-          lead={selected}
-          dictionary={dictionary}
-          pw={pw}
-          onClose={() => setSelected(null)}
-          onChanged={onChanged}
-        />
-      )}
-    </main>
+        {selected && (
+          <LeadPanel
+            lead={selected}
+            dictionary={dictionary}
+            pw={pw}
+            onClose={() => setSelected(null)}
+            onChanged={onChanged}
+          />
+        )}
+      </main>
+    </div>
   );
 }

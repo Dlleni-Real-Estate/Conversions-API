@@ -5,6 +5,7 @@ import {
   fetchAdLeads,
   listLeadForms,
   fetchCampaignAdInsights,
+  fetchCampaignInsights,
   fetchFormSchema,
   flattenFields,
   normalizeEgyptPhone,
@@ -220,19 +221,29 @@ async function refreshInsights(
   db: ReturnType<typeof supabaseAdmin>,
   campaignId: string
 ): Promise<{ rows: number; spend: number }> {
-  const insights = await fetchCampaignAdInsights(campaignId);
-  if (insights.length === 0) return { rows: 0, spend: 0 };
+  // Campaign level FIRST, because that is the number the dashboard reports.
+  // It is taken from Meta verbatim rather than added up from the ad rows —
+  // reach is deduplicated people, so adding it double-counts anyone who saw
+  // two ads, and that is exactly how a dashboard starts disagreeing with
+  // Ads Manager.
+  const campaign = await fetchCampaignInsights(campaignId);
+  if (campaign) {
+    const { error } = await db
+      .from("campaign_insights")
+      .upsert({ ...campaign, updated_at: new Date().toISOString() }, { onConflict: "campaign_id" });
+    if (error) throw new Error(error.message);
+  }
 
-  const { error } = await db.from("ad_insights").upsert(
-    insights.map((i) => ({ ...i, updated_at: new Date().toISOString() })),
-    { onConflict: "ad_id" }
-  );
-  if (error) throw new Error(error.message);
+  const ads = await fetchCampaignAdInsights(campaignId);
+  if (ads.length > 0) {
+    const { error } = await db.from("ad_insights").upsert(
+      ads.map((i) => ({ ...i, updated_at: new Date().toISOString() })),
+      { onConflict: "ad_id" }
+    );
+    if (error) throw new Error(error.message);
+  }
 
-  return {
-    rows: insights.length,
-    spend: Math.round(insights.reduce((sum, i) => sum + i.spend, 0) * 100) / 100,
-  };
+  return { rows: ads.length, spend: campaign?.spend ?? 0 };
 }
 
 /**

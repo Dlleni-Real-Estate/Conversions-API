@@ -13,6 +13,20 @@ body {
 /* Arabic content (names, form answers) inside an LTR page stays readable. */
 .rtl { direction: rtl; unicode-bidi: isolate; }
 
+/* An empty note box should look like an invitation to write in it, not like a
+   disabled field. Dashed while empty, solid the moment it has content. */
+.note-empty {
+  border-style: dashed;
+  border-color: #cbd5e1;
+  background: transparent;
+}
+.note-empty:hover { border-color: #94a3b8; background: #f8fafc; }
+.note-filled {
+  border-style: solid;
+  border-color: #e2e8f0;
+  background: #f8fafc;
+}
+
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 9999px; border: 3px solid transparent; background-clip: content-box; }
 ::-webkit-scrollbar-thumb:hover { background: #94a3b8; background-clip: content-box; }

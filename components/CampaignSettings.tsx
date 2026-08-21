@@ -113,7 +113,7 @@ export default function CampaignSettings({ pw }: { pw: string }) {
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="border-b border-slate-100 bg-slate-50/60">
+            <thead className="border-b border-slate-200 bg-slate-100">
               <tr>
                 <Th>{t.colCampaign}</Th>
                 <Th>{t.colCreated}</Th>
@@ -121,7 +121,7 @@ export default function CampaignSettings({ pw }: { pw: string }) {
                 <Th>{t.colTracked}</Th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody className="divide-y divide-slate-200">
               {campaigns.map((c) => {
                 const r = REASON[c.reason];
                 const pinned = c.reason.startsWith("manual");

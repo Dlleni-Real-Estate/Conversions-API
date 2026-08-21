@@ -40,7 +40,10 @@ export type AdRow = {
   cpc: number;
   cpm: number;
   meta_leads: number;
+  meta_cost_per_lead: number | null;
   currency: string | null;
+  date_start: string | null;
+  date_stop: string | null;
   leads: number;
   untouched: number;
   worked: number;
@@ -68,6 +71,26 @@ export type Analytics = {
   currency: string;
   scope: string | null;
   campaigns: { id: string; name: string }[];
+  /** Straight from Meta — nothing here is derived from our lead table. */
+  meta: {
+    spend: number;
+    impressions: number;
+    clicks: number;
+    link_clicks: number;
+    /** null when more than one campaign is in scope — reach cannot be added. */
+    reach: number | null;
+    frequency: number | null;
+    reach_exact: boolean;
+    ctr: number | null;
+    cpc: number | null;
+    cpm: number | null;
+    leads: number;
+    cost_per_lead: number | null;
+    currency: string;
+    date_start: string | null;
+    date_stop: string | null;
+    campaigns: number;
+  };
   kpis: {
     leads: number;
     untouched: number;

@@ -22,6 +22,25 @@ type LeadRow = {
   raw_fields: Record<string, string> | null;
 };
 
+type CampaignInsightRow = {
+  campaign_id: string;
+  campaign_name: string | null;
+  spend: number;
+  impressions: number;
+  reach: number;
+  frequency: number;
+  clicks: number;
+  link_clicks: number;
+  ctr: number;
+  cpc: number;
+  cpm: number;
+  meta_leads: number;
+  cost_per_lead: number | null;
+  currency: string | null;
+  date_start: string | null;
+  date_stop: string | null;
+};
+
 /** A form answer is only worth charting if it repeats — free text never does. */
 const MAX_DISTINCT_ANSWERS = 12;
 const MIN_ROWS_PER_ANSWER = 2;
@@ -50,8 +69,16 @@ export async function GET(req: NextRequest) {
   let adQuery = db.from("ad_performance").select("*");
   if (scoped) adQuery = adQuery.eq("campaign_id", scoped);
 
-  const [{ data: leadsRaw, error: leadErr }, { data: adsRaw, error: adErr }, { data: formRows }] =
-    await Promise.all([leadQuery, adQuery, db.from("lead_forms").select("form_id, name, locale, questions")]);
+  let ciQuery = db.from("campaign_insights").select("*");
+  if (scoped) ciQuery = ciQuery.eq("campaign_id", scoped);
+
+  const [{ data: leadsRaw, error: leadErr }, { data: adsRaw, error: adErr }, { data: formRows }, { data: ciRaw }] =
+    await Promise.all([
+      leadQuery,
+      adQuery,
+      db.from("lead_forms").select("form_id, name, locale, questions"),
+      ciQuery,
+    ]);
 
   const dict = buildDictionary((formRows ?? []) as unknown as FormSchema[]);
 
@@ -60,15 +87,51 @@ export async function GET(req: NextRequest) {
 
   const leads = (leadsRaw ?? []) as LeadRow[];
   const ads = (adsRaw ?? []) as Record<string, number | string | null>[];
+  const ci = (ciRaw ?? []) as CampaignInsightRow[];
 
-  // ── Money ────────────────────────────────────────────────────────────────
-  // Spend comes from the ads we are showing, so it always matches the table
-  // underneath it rather than being a separate number nobody can reconcile.
-  const spend = money(ads.reduce((s, a) => s + Number(a.spend ?? 0), 0));
-  const reach = ads.reduce((s, a) => s + Number(a.reach ?? 0), 0);
-  const impressions = ads.reduce((s, a) => s + Number(a.impressions ?? 0), 0);
-  const clicks = ads.reduce((s, a) => s + Number(a.clicks ?? 0), 0);
-  const currency = (ads.find((a) => a.currency)?.currency as string | undefined) ?? "EGP";
+  // ── Delivery and money: Meta's own numbers, not ours ─────────────────────
+  //
+  // These are read straight out of what Meta reported at campaign level. The
+  // one thing that must never be added up is REACH: it counts people, and Meta
+  // has already deduplicated anyone who saw more than one ad. Adding two
+  // campaigns' reach counts the overlap twice, so with more than one campaign
+  // in scope we return null rather than a number that looks right and is not.
+  //
+  // Spend, impressions and clicks are events, so they add. CTR, CPC and CPM
+  // are ratios of those, so recomputing them from the sums is exact.
+  const sum = (k: keyof CampaignInsightRow) => ci.reduce((acc, r) => acc + Number(r[k] ?? 0), 0);
+
+  const single = ci.length === 1 ? ci[0] : null;
+  const spend = money(sum("spend"));
+  const impressions = sum("impressions");
+  const clicks = sum("clicks");
+  const linkClicks = sum("link_clicks");
+  const metaLeads = sum("meta_leads");
+  const currency = ci.find((r) => r.currency)?.currency ?? "EGP";
+
+  const meta = {
+    spend,
+    impressions,
+    clicks,
+    link_clicks: linkClicks,
+    // Deduplicated people — only trustworthy for a single campaign.
+    reach: single ? Number(single.reach) : null,
+    frequency: single ? Number(single.frequency) : null,
+    reach_exact: ci.length <= 1,
+    ctr: impressions ? Math.round((10000 * clicks) / impressions) / 100 : null,
+    cpc: clicks ? money(spend / clicks) : null,
+    cpm: impressions ? money((spend / impressions) * 1000) : null,
+    leads: metaLeads,
+    cost_per_lead: metaLeads ? money(spend / metaLeads) : null,
+    currency,
+    // Meta's reporting lags — showing the window it covers is what stops this
+    // looking like a bug when the CRM already has leads Meta has not counted.
+    date_start: ci.map((r) => r.date_start).filter(Boolean).sort()[0] ?? null,
+    date_stop: ci.map((r) => r.date_stop).filter(Boolean).sort().reverse()[0] ?? null,
+    campaigns: ci.length,
+  };
+
+  const reach = meta.reach ?? 0;
 
   // ── Funnel ───────────────────────────────────────────────────────────────
   // Cumulative by rank: a lead sitting at "Reservation" has passed every stage
@@ -189,6 +252,11 @@ export async function GET(req: NextRequest) {
     currency,
     scope: scoped,
     campaigns,
+    // Verbatim from Meta — nothing here is derived from our own lead table.
+    meta,
+    // Our pipeline. Cost-per-stage divides Meta's spend by OUR counts, which is
+    // the more useful number day to day: our lead count is exact and immediate,
+    // Meta's lags. The two are shown side by side rather than blended.
     kpis: {
       leads: total,
       untouched,
@@ -196,7 +264,7 @@ export async function GET(req: NextRequest) {
       reach,
       impressions,
       clicks,
-      ctr: impressions ? Math.round((10000 * clicks) / impressions) / 100 : null,
+      ctr: meta.ctr,
       cost_per_lead: total ? money(spend / total) : null,
       qualified,
       qualified_pct: pct(qualified, total),
