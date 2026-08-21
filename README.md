@@ -137,13 +137,30 @@ Meta states this in its **developer** documentation (the Business Help Centre do
 - The stage you optimise for **occurs within 28 days** of the lead
 - The stage you optimise for has a **conversion rate between 1% and 40%**
 
-The 1%–40% rule is the one that bites: it is measured against the raw-lead stage, so if `Qualified` comes out at 60% of leads it separates nothing and the goal will not train on it. Pick something deeper. The **Qual. %** column in Analytics is what tells you.
+The 1%–40% rule is the one that bites: it is measured against the raw-lead stage, so if `Qualified` comes out at 60% of leads it separates nothing and the goal will not train on it. The **Qual. %** column in Analytics is what tells you.
 
 Meta's own project timeline for this integration: ~1–2 days data validation, then a **2–4 week learning period** before the full performance lift shows. Total time to value ~3–4 weeks.
 
+### Configuring the sales funnel
+
+Meta does **not** have a fixed list of lead statuses that ours must map onto. Its in-account CRM guide defines the field as *"`event_name` — The name of a critical stage in your CRM that a lead is changing to"*: the name is ours. What Meta does have is two buckets, arranged by hand in Events Manager under *Configure your sales funnel*:
+
+- **Positive stages** — *"Events that signify a quality lead"*. You order them yourself; that order is the funnel Meta trains on. Ours, in order: `RawLead → Contacted → Qualified → MeetingBooked → MeetingDone → SiteVisitBooked → SiteVisitDone → EOI → Reservation`.
+- **Other stages** — *"Events that do not signify a quality lead, for example, test events or events accidentally uploaded from another system."* Ours should stay empty.
+
+`NoAnswer` and `Disqualified` belong in **neither**. Meta: *"Remove events that indicate a negative lead or do not belong in your sales funnel by clicking the minus (-) button next to each event. These could be leads that received a phone call, but decided to not convert into a sale."* We keep sending them — they are useful in our own reporting and for future exclusion audiences — but they must be removed from the funnel screen.
+
 ### Choosing the event
 
-An event only appears in the dropdown once it has actually reached the dataset, which is why the team should start setting stages now. Pick a stage that genuinely separates: if `Qualified` turns out to be most of your leads it discriminates nothing, and a deeper stage such as `SiteVisitDone` is the better target. The **Qual. %** column in Analytics is what tells you which.
+An event only appears in the dropdown once it has actually reached the dataset, which is why the team should start setting stages now.
+
+Pick the **earliest** stage that genuinely separates, not the deepest. Meta: *"select the earliest lead stage to optimize for. The selected lead stage does not need to be the last stage of the funnel. **The system optimizes for all down-funnel stages as well.**"* Choosing `Qualified` therefore also pulls for `MeetingDone`, `SiteVisitDone`, `EOI` and `Reservation` — there is no trade-off to make.
+
+The one reason to go deeper is the 1%–40% rule: if `Qualified` turns out to be most of your leads it discriminates nothing, and `SiteVisitDone` becomes the target instead. The **Qual. %** column in Analytics is what tells you which.
+
+Meta may also override the choice on its own: *"The system may adjust and optimize for a different lead stage than the one you selected as the optimization target if better performance can be achieved."*
+
+The funnel screen only unlocks after Meta validates the feed — its guide ends with *"Once your integration is working, Meta will validate the data"*, which takes roughly a day of daily uploads.
 
 > Also build a **Lookalike from the leads that reserved**, not from all leads. That is the strongest audience this data will ever produce.
 

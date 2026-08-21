@@ -9,6 +9,11 @@
  * "Booked" and "done" are deliberately separate stages. The gap between them is
  * the no-show rate, and no-show rate per creative is one of the most honest
  * quality signals a real-estate team has.
+ *
+ * `rank` is also the order these must be arranged in under Events Manager's
+ * "Positive stages" list. Pick the EARLIEST meaningful one as the optimisation
+ * target, not the deepest — Meta: "select the earliest lead stage to optimize
+ * for ... The system optimizes for all down-funnel stages as well."
  */
 
 export type Status =
@@ -182,6 +187,14 @@ export const STAGES: StageDef[] = [
     hintAr: "دفع — ده الهدف اللي كل حاجة تانية بتحاول تتنبأ بيه",
   },
   {
+    // Sent, kept, reported on — but REMOVED from the funnel screen in Events
+    // Manager. Meta has exactly two buckets there, "Positive stages" and
+    // "Other stages" (the latter meaning test events / accidental uploads),
+    // and neither is right for a negative outcome. Its instruction:
+    // "Remove events that indicate a negative lead or do not belong in your
+    // sales funnel by clicking the minus (-) button next to each event. These
+    // could be leads that received a phone call, but decided to not convert
+    // into a sale." Same applies to NoAnswer above.
     status: "disqualified",
     label: "Disqualified",
     labelAr: "مستبعد",
