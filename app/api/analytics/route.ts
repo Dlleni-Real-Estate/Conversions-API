@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 import { isAuthed } from "@/lib/auth";
 import { FUNNEL, STAGE_BY_STATUS, rankOf, type Status } from "@/lib/stages";
+import { answerLabel, buildDictionary, questionLabel } from "@/lib/labels";
+import type { FormSchema } from "@/lib/meta";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -48,10 +50,10 @@ export async function GET(req: NextRequest) {
   let adQuery = db.from("ad_performance").select("*");
   if (scoped) adQuery = adQuery.eq("campaign_id", scoped);
 
-  const [{ data: leadsRaw, error: leadErr }, { data: adsRaw, error: adErr }] = await Promise.all([
-    leadQuery,
-    adQuery,
-  ]);
+  const [{ data: leadsRaw, error: leadErr }, { data: adsRaw, error: adErr }, { data: formRows }] =
+    await Promise.all([leadQuery, adQuery, db.from("lead_forms").select("form_id, name, locale, questions")]);
+
+  const dict = buildDictionary((formRows ?? []) as unknown as FormSchema[]);
 
   if (leadErr) return NextResponse.json({ error: leadErr.message }, { status: 500 });
   if (adErr) return NextResponse.json({ error: adErr.message }, { status: 500 });
@@ -149,10 +151,14 @@ export async function GET(req: NextRequest) {
     .filter(([, byValue]) => byValue.size > 1 && byValue.size <= MAX_DISTINCT_ANSWERS)
     .map(([field, byValue]) => ({
       field,
+      // The question and answers as the customer read them — not translated,
+      // just looked up. Falls back to the key when the form is unknown.
+      label: questionLabel(dict, field),
       values: [...byValue.entries()]
         .filter(([, r]) => r.leads >= MIN_ROWS_PER_ANSWER)
         .map(([value, r]) => ({
           value,
+          label: answerLabel(dict, field, value),
           leads: r.leads,
           qualified: r.qualified,
           reservations: r.reservations,
@@ -210,5 +216,6 @@ export async function GET(req: NextRequest) {
     daily,
     segments,
     platforms,
+    dictionary: dict,
   });
 }

@@ -465,3 +465,39 @@ export async function fetchCampaignAdInsights(campaignId: string): Promise<AdIns
 
   return out;
 }
+
+// ── Form schema (the actual wording the customer read) ──────────────────────
+//
+// A lead comes back as machine keys: { payment_method: "still_exploring" }.
+// The Arabic the customer actually saw — "تحب تدفع إزاي؟" and
+// "لسه بستكشف وبسأل" — lives only on the form definition. Fetch it once per
+// form and keep it for display; never translate, never paraphrase.
+
+export type FormQuestion = {
+  key: string;
+  label: string;
+  type?: string;
+  options?: { key: string; value: string }[];
+};
+
+export type FormSchema = {
+  form_id: string;
+  name: string;
+  locale: string | null;
+  questions: FormQuestion[];
+};
+
+export async function fetchFormSchema(formId: string): Promise<FormSchema> {
+  const pageToken = await getPageToken();
+  const data = await graph<{ id: string; name?: string; locale?: string; questions?: FormQuestion[] }>(
+    `/${formId}`,
+    { fields: "id,name,locale,questions" },
+    pageToken
+  );
+  return {
+    form_id: data.id,
+    name: data.name ?? formId,
+    locale: data.locale ?? null,
+    questions: data.questions ?? [],
+  };
+}

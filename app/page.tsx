@@ -5,17 +5,29 @@ import LeadsView from "@/components/LeadsView";
 import LeadPanel from "@/components/LeadPanel";
 import AnalyticsView from "@/components/AnalyticsView";
 import CampaignSettings from "@/components/CampaignSettings";
+import { LangProvider, LangSwitch, useLang } from "@/components/LangProvider";
+import type { FormDictionary } from "@/lib/labels";
 import type { Analytics, Lead } from "@/components/types";
 
 const PW_KEY = "dlleni_pw";
 const TABS = [
-  { id: "pipeline", label: "Pipeline" },
-  { id: "analytics", label: "Analytics" },
-  { id: "settings", label: "Settings" },
+  { id: "pipeline", tk: "tabPipeline" },
+  { id: "analytics", tk: "tabAnalytics" },
+  { id: "settings", tk: "tabSettings" },
 ] as const;
 type Tab = (typeof TABS)[number]["id"];
 
-export default function Dashboard() {
+export default function Page() {
+  // The provider owns dir/lang on <html>, so it has to sit above everything.
+  return (
+    <LangProvider>
+      <Dashboard />
+    </LangProvider>
+  );
+}
+
+function Dashboard() {
+  const { t, locale } = useLang();
   const [pw, setPw] = useState("");
   const [authed, setAuthed] = useState(false);
   const [tab, setTab] = useState<Tab>("pipeline");
@@ -23,6 +35,7 @@ export default function Dashboard() {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [analytics, setAnalytics] = useState<Analytics | null>(null);
   const [selected, setSelected] = useState<Lead | null>(null);
+  const [dictionary, setDictionary] = useState<FormDictionary | null>(null);
 
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -55,7 +68,7 @@ export default function Dashboard() {
         if (leadRes.status === 401) {
           setAuthed(false);
           window.sessionStorage.removeItem(PW_KEY);
-          setErr("Wrong password");
+          setErr(t.wrongPassword);
           return;
         }
 
@@ -63,12 +76,13 @@ export default function Dashboard() {
         const statsJson = await statsRes.json();
 
         setLeads(leadJson.leads || []);
+        if (leadJson.dictionary) setDictionary(leadJson.dictionary);
         if (statsJson.ok) setAnalytics(statsJson);
         setAuthed(true);
         setLastLoaded(new Date());
         window.sessionStorage.setItem(PW_KEY, password);
       } catch {
-        setErr("Could not reach the server");
+        setErr(t.connectionError);
       } finally {
         setLoading(false);
       }
@@ -97,18 +111,23 @@ export default function Dashboard() {
           }}
           className="w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-8 shadow-sm"
         >
-          <h1 className="text-lg font-semibold tracking-tight">Dlleni · Lead Pipeline</h1>
-          <p className="mt-1 text-sm text-slate-500">Sign in to continue</p>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h1 className="text-lg font-semibold tracking-tight">{t.appTitle}</h1>
+              <p className="mt-1 text-sm text-slate-500">{t.signInSub}</p>
+            </div>
+            <LangSwitch />
+          </div>
           <input
             type="password"
             value={pw}
             onChange={(e) => setPw(e.target.value)}
             className="mt-5 w-full rounded-xl border border-slate-300 px-4 py-2.5 outline-none focus:border-slate-900"
-            placeholder="Password"
+            placeholder={t.password}
             autoFocus
           />
           <button className="mt-4 w-full rounded-xl bg-slate-900 py-2.5 text-sm font-medium text-white hover:bg-slate-800">
-            Sign in
+            {t.signIn}
           </button>
           {err && <p className="mt-3 text-center text-sm text-red-600">{err}</p>}
         </form>
@@ -122,20 +141,19 @@ export default function Dashboard() {
     <main className="mx-auto max-w-[1600px] px-6 py-6">
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">Dlleni · Lead Pipeline</h1>
-          <p className="mt-0.5 text-sm text-slate-500">
-            Every stage you set here goes back to Meta, so the algorithm learns which ads bring buyers.
-          </p>
+          <h1 className="text-xl font-semibold tracking-tight">{t.appTitle}</h1>
+          <p className="mt-0.5 text-sm text-slate-500">{t.appTagline}</p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          <LangSwitch />
           {campaignOptions.length > 1 && (
             <select
               value={scope}
               onChange={(e) => setScope(e.target.value)}
               className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs"
             >
-              <option value="all">All campaigns</option>
+              <option value="all">{t.allCampaigns}</option>
               {campaignOptions.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.name}
@@ -147,28 +165,28 @@ export default function Dashboard() {
             onClick={() => load()}
             disabled={loading}
             className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium hover:bg-slate-50 disabled:opacity-40"
-            title="Leads arrive on their own every 10 minutes — this just re-reads what is already stored"
+            title={t.refreshHint}
           >
-            {loading ? "Refreshing…" : "Refresh"}
+            {loading ? t.refreshing : t.refresh}
           </button>
         </div>
       </header>
 
       <nav className="mt-5 flex items-center gap-1 border-b border-slate-200">
-        {TABS.map((t) => (
+        {TABS.map((tb) => (
           <button
-            key={t.id}
-            onClick={() => setTab(t.id)}
+            key={tb.id}
+            onClick={() => setTab(tb.id)}
             className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium transition ${
-              tab === t.id ? "border-slate-900 text-slate-900" : "border-transparent text-slate-500 hover:text-slate-800"
+              tab === tb.id ? "border-slate-900 text-slate-900" : "border-transparent text-slate-500 hover:text-slate-800"
             }`}
           >
-            {t.label}
+            {t[tb.tk]}
           </button>
         ))}
-        <span className="ml-auto pb-2 text-[11px] text-slate-400">
+        <span className="ms-auto pb-2 text-[11px] text-slate-400">
           {lastLoaded
-            ? `Updated ${lastLoaded.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`
+            ? `${t.updated} ${lastLoaded.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit", numberingSystem: "latn" })}`
             : ""}
         </span>
       </nav>
@@ -181,6 +199,9 @@ export default function Dashboard() {
         {tab === "pipeline" && (
           <LeadsView
             leads={leads}
+            dictionary={dictionary}
+            pw={pw}
+            onChanged={onChanged}
             loading={loading}
             statusFilter={statusFilter}
             onStatusFilter={setStatusFilter}
@@ -196,14 +217,22 @@ export default function Dashboard() {
             <AnalyticsView data={analytics} />
           ) : (
             <div className="rounded-2xl border border-slate-200 bg-white px-5 py-14 text-center text-sm text-slate-400">
-              {loading ? "Loading…" : "No data yet."}
+              {loading ? t.loading : t.noData}
             </div>
           ))}
 
         {tab === "settings" && <CampaignSettings pw={pw} />}
       </div>
 
-      {selected && <LeadPanel lead={selected} pw={pw} onClose={() => setSelected(null)} onChanged={onChanged} />}
+      {selected && (
+        <LeadPanel
+          lead={selected}
+          dictionary={dictionary}
+          pw={pw}
+          onClose={() => setSelected(null)}
+          onChanged={onChanged}
+        />
+      )}
     </main>
   );
 }

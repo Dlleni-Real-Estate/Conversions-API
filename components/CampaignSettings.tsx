@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Card, Empty, Td, Th } from "./ui";
+import { useLang } from "./LangProvider";
 
 export type CampaignState = {
   id: string;
@@ -14,16 +15,17 @@ export type CampaignState = {
   reason: "manual-on" | "manual-off" | "auto-new" | "auto-old";
 };
 
-const REASON: Record<CampaignState["reason"], { label: string; className: string }> = {
-  "auto-new": { label: "Auto", className: "border-emerald-200 bg-emerald-50 text-emerald-700" },
-  "auto-old": { label: "Before cutoff", className: "border-slate-200 bg-slate-50 text-slate-500" },
-  "manual-on": { label: "Pinned on", className: "border-emerald-300 bg-white text-emerald-700" },
-  "manual-off": { label: "Pinned off", className: "border-red-200 bg-white text-red-600" },
+const REASON: Record<CampaignState["reason"], { tk: "rAuto" | "rBefore" | "rPinnedOn" | "rPinnedOff"; className: string }> = {
+  "auto-new": { tk: "rAuto", className: "border-emerald-200 bg-emerald-50 text-emerald-700" },
+  "auto-old": { tk: "rBefore", className: "border-slate-200 bg-slate-50 text-slate-500" },
+  "manual-on": { tk: "rPinnedOn", className: "border-emerald-300 bg-white text-emerald-700" },
+  "manual-off": { tk: "rPinnedOff", className: "border-red-200 bg-white text-red-600" },
 };
 
 const toDateInput = (iso: string) => new Date(iso).toISOString().slice(0, 10);
 
 export default function CampaignSettings({ pw }: { pw: string }) {
+  const { t, locale } = useLang();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [cutoff, setCutoff] = useState("");
@@ -31,7 +33,7 @@ export default function CampaignSettings({ pw }: { pw: string }) {
 
   const apply = useCallback((json: { ok?: boolean; error?: string; cutoff?: string; campaigns?: CampaignState[] }) => {
     if (!json.ok) {
-      setErr(json.error || "Something went wrong");
+      setErr(json.error || "Error");
       return;
     }
     setErr(null);
@@ -45,7 +47,7 @@ export default function CampaignSettings({ pw }: { pw: string }) {
       const res = await fetch("/api/campaigns", { headers: { "x-app-password": pw } });
       apply(await res.json());
     } catch {
-      setErr("Could not reach the server");
+      setErr(t.connectionError);
     } finally {
       setBusy(false);
     }
@@ -65,7 +67,7 @@ export default function CampaignSettings({ pw }: { pw: string }) {
       });
       apply(await res.json());
     } catch {
-      setErr("Could not reach the server");
+      setErr(t.connectionError);
     } finally {
       setBusy(false);
     }
@@ -75,21 +77,21 @@ export default function CampaignSettings({ pw }: { pw: string }) {
 
   return (
     <Card
-      title="Tracked campaigns"
-      subtitle={`${trackedCount} of ${campaigns.length} campaigns feed this dashboard`}
+      title={t.trackedCampaigns}
+      subtitle={t.trackedSub(trackedCount, campaigns.length)}
       right={
         <button
           onClick={load}
           disabled={busy}
           className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium hover:bg-slate-50 disabled:opacity-40"
         >
-          {busy ? "…" : "Refresh"}
+          {busy ? "…" : t.refresh}
         </button>
       }
     >
       <div className="border-b border-slate-100 px-5 py-4">
         <label className="flex flex-wrap items-center gap-2 text-sm">
-          <span className="font-medium text-slate-800">Pull from any campaign created on or after</span>
+          <span className="font-medium text-slate-800">{t.cutoffLabel}</span>
           <input
             type="date"
             value={cutoff}
@@ -100,25 +102,23 @@ export default function CampaignSettings({ pw }: { pw: string }) {
           />
         </label>
         <p className="mt-2 max-w-3xl text-xs leading-relaxed text-slate-500">
-          Launch a campaign in Ads Manager and it starts feeding this dashboard on the next sync — its forms come with
-          it, because the sync walks campaign → ads → leads rather than sweeping the Page. Anything created before the
-          date stays out. Pin a campaign on or off below to override the rule either way.
+{t.cutoffHelp}
         </p>
       </div>
 
       {err && <p className="px-5 pt-3 text-sm text-red-600">{err}</p>}
 
       {campaigns.length === 0 ? (
-        <Empty>{busy ? "Loading…" : "No campaigns found."}</Empty>
+        <Empty>{busy ? t.loading : t.noCampaigns}</Empty>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="border-b border-slate-100 bg-slate-50/60">
               <tr>
-                <Th>Campaign</Th>
-                <Th>Created</Th>
-                <Th>Delivery</Th>
-                <Th>Tracked</Th>
+                <Th>{t.colCampaign}</Th>
+                <Th>{t.colCreated}</Th>
+                <Th>{t.colDelivery}</Th>
+                <Th>{t.colTracked}</Th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -133,12 +133,12 @@ export default function CampaignSettings({ pw }: { pw: string }) {
                     </Td>
                     <Td>
                       <span className="text-xs">
-                        {new Date(c.created_time).toLocaleDateString("en-GB", { dateStyle: "medium" })}
+                        {new Date(c.created_time).toLocaleDateString(locale, { dateStyle: "medium", numberingSystem: "latn" })}
                       </span>
                     </Td>
                     <Td>
                       <span className={`text-xs ${c.effective_status === "ACTIVE" ? "text-emerald-700" : "text-slate-400"}`}>
-                        {c.effective_status === "ACTIVE" ? "Active" : (c.effective_status || "—").toLowerCase()}
+                        {c.effective_status === "ACTIVE" ? t.active : (c.effective_status || "—").toLowerCase()}
                       </span>
                     </Td>
                     <Td>
@@ -154,16 +154,16 @@ export default function CampaignSettings({ pw }: { pw: string }) {
                               : "border-slate-300 bg-white text-slate-600"
                           }`}
                         >
-                          {c.tracked ? "On" : "Off"}
+                          {c.tracked ? t.on : t.off}
                         </button>
-                        <span className={`rounded-md border px-1.5 py-0.5 text-[11px] ${r.className}`}>{r.label}</span>
+                        <span className={`rounded-md border px-1.5 py-0.5 text-[11px] ${r.className}`}>{t[r.tk]}</span>
                         {pinned && (
                           <button
                             disabled={busy}
                             onClick={() => post({ campaign_id: c.id, enabled: null })}
                             className="text-[11px] text-slate-400 underline hover:text-slate-600 disabled:opacity-40"
                           >
-                            unpin
+                            {t.unpin}
                           </button>
                         )}
                       </div>

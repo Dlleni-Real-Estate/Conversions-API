@@ -1,4 +1,5 @@
 import type { Status } from "@/lib/stages";
+import type { FormDictionary } from "@/lib/labels";
 
 export type Lead = {
   lead_id: string;
@@ -101,7 +102,18 @@ export type Analytics = {
   daily: { date: string; leads: number; qualified: number; reservations: number }[];
   segments: {
     field: string;
-    values: { value: string; leads: number; qualified: number; reservations: number; qualified_pct: number | null }[];
+    /** The question as written on the form — never translated, just looked up. */
+    label: string;
+    values: {
+      value: string;
+      /** The answer as written on the form. */
+      label: string;
+      leads: number;
+      qualified: number;
+      reservations: number;
+      qualified_pct: number | null;
+    }[];
   }[];
+  dictionary: FormDictionary;
   platforms: { platform: string; leads: number; qualified: number; qualified_pct: number | null }[];
 };

@@ -5,6 +5,7 @@ import {
   fetchAdLeads,
   listLeadForms,
   fetchCampaignAdInsights,
+  fetchFormSchema,
   flattenFields,
   normalizeEgyptPhone,
 } from "@/lib/meta";
@@ -56,6 +57,7 @@ export async function GET(req: NextRequest) {
     // The lead object carries form_id but not the form's title, and the title
     // is what the dashboard shows. One paged call for the whole Page, resolved
     // once per run rather than once per lead.
+    const formIdsSeen = new Set<string>();
     const formNames = new Map<string, string>();
     if (tracked.length > 0) {
       try {
@@ -121,6 +123,7 @@ export async function GET(req: NextRequest) {
         }
 
         leadsFound += found;
+        for (const r of rows) if (r.form_id) formIdsSeen.add(String(r.form_id));
 
         if (rows.length === 0) {
           const spend = await refreshInsights(db, campaign.id).then(
@@ -167,6 +170,10 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    // The wording of each form — what the customer actually read — so the
+    // dashboard can show the Arabic question and answer instead of Meta's keys.
+    const formsStored = await refreshFormSchemas(db, formIdsSeen);
+
     if (run?.id) {
       await db
         .from("sync_runs")
@@ -189,6 +196,7 @@ export async function GET(req: NextRequest) {
       leadsFound,
       leadsNew,
       insightsRows,
+      formsStored,
       perCampaign,
     });
   } catch (err) {
@@ -225,4 +233,39 @@ async function refreshInsights(
     rows: insights.length,
     spend: Math.round(insights.reduce((sum, i) => sum + i.spend, 0) * 100) / 100,
   };
+}
+
+/**
+ * Store the wording of every form we saw leads from. Refreshed weekly: form
+ * copy changes rarely, and a stale label is a cosmetic problem, not a data one.
+ */
+async function refreshFormSchemas(
+  db: ReturnType<typeof supabaseAdmin>,
+  formIds: Set<string>
+): Promise<number> {
+  if (formIds.size === 0) return 0;
+
+  const weekAgo = new Date(Date.now() - 7 * 24 * 3600_000).toISOString();
+  const { data: fresh } = await db
+    .from("lead_forms")
+    .select("form_id")
+    .in("form_id", [...formIds])
+    .gt("updated_at", weekAgo);
+
+  const known = new Set((fresh ?? []).map((f: { form_id: string }) => f.form_id));
+  const stale = [...formIds].filter((id) => !known.has(id));
+  if (stale.length === 0) return 0;
+
+  const schemas = [];
+  for (const id of stale) {
+    try {
+      schemas.push({ ...(await fetchFormSchema(id)), updated_at: new Date().toISOString() });
+    } catch {
+      // A form we cannot read just falls back to showing its keys.
+    }
+  }
+  if (schemas.length === 0) return 0;
+
+  await db.from("lead_forms").upsert(schemas, { onConflict: "form_id" });
+  return schemas.length;
 }

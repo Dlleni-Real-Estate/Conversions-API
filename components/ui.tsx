@@ -21,23 +21,30 @@ export const fmtMoney2 = (n: number | null | undefined, currency = "EGP") =>
 export const fmtPct = (n: number | null | undefined) =>
   n === null || n === undefined || !Number.isFinite(Number(n)) ? "—" : `${Number(n)}%`;
 
-export const fmtDate = (iso: string | null | undefined) =>
+export const fmtDate = (iso: string | null | undefined, locale = "en-GB") =>
   !iso
     ? "—"
-    : new Date(iso).toLocaleString("en-GB", {
+    : new Date(iso).toLocaleString(locale, {
         day: "2-digit",
         month: "short",
         hour: "2-digit",
         minute: "2-digit",
+        numberingSystem: "latn",
       });
 
-export const fmtDay = (iso: string) =>
-  new Date(iso).toLocaleDateString("en-GB", { day: "2-digit", month: "short" });
+export const fmtDay = (iso: string, locale = "en-GB") =>
+  new Date(iso).toLocaleDateString(locale, { day: "2-digit", month: "short", numberingSystem: "latn" });
 
-/** "3h ago", "2d ago" — for how long a lead has been sitting untouched. */
-export function fmtAgo(iso: string | null | undefined): string {
+/** "3h ago" / "من 3 ساعة" — how long a lead has been sitting untouched. */
+export function fmtAgo(iso: string | null | undefined, lang: "en" | "ar" = "en"): string {
   if (!iso) return "—";
   const mins = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
+  if (lang === "ar") {
+    if (mins < 60) return `من ${mins} دقيقة`;
+    const h = Math.round(mins / 60);
+    if (h < 48) return `من ${h} ساعة`;
+    return `من ${Math.round(h / 24)} يوم`;
+  }
   if (mins < 60) return `${mins}m ago`;
   const hours = Math.round(mins / 60);
   if (hours < 48) return `${hours}h ago`;
@@ -125,9 +132,11 @@ export function Bar({ value, max, color = "#0f172a" }: { value: number; max: num
 export function Columns({
   data,
   height = 120,
+  secondaryLabel = "qual.",
 }: {
   data: { label: string; value: number; secondary?: number }[];
   height?: number;
+  secondaryLabel?: string;
 }) {
   const max = Math.max(1, ...data.map((d) => d.value));
   return (
@@ -147,7 +156,7 @@ export function Columns({
             )}
             <div className="pointer-events-none absolute -top-6 left-1/2 hidden -translate-x-1/2 whitespace-nowrap rounded bg-slate-900 px-1.5 py-0.5 text-[10px] text-white group-hover:block">
               {d.value}
-              {d.secondary !== undefined ? ` · ${d.secondary} qual.` : ""}
+              {d.secondary !== undefined ? ` · ${d.secondary} ${secondaryLabel}` : ""}
             </div>
           </div>
           <div className="text-[10px] leading-none text-slate-400">{d.label}</div>
@@ -159,9 +168,11 @@ export function Columns({
 
 export function Th({ children, align = "left" }: { children: ReactNode; align?: "left" | "right" }) {
   return (
+    // Logical alignment (start/end), so the whole table mirrors in Arabic
+    // without a second set of styles.
     <th
       className={`whitespace-nowrap px-3 py-2.5 text-[11px] font-medium uppercase tracking-wide text-slate-500 ${
-        align === "right" ? "text-right" : "text-left"
+        align === "right" ? "text-end" : "text-start"
       }`}
     >
       {children}
@@ -180,7 +191,7 @@ export function Td({
 }) {
   return (
     <td
-      className={`px-3 py-2.5 ${align === "right" ? "text-right tabular-nums" : ""} ${className}`}
+      className={`px-3 py-2.5 ${align === "right" ? "text-end tabular-nums" : ""} ${className}`}
     >
       {children}
     </td>

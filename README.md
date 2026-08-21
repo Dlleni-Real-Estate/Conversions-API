@@ -52,7 +52,7 @@ Default cutoff: **1 Aug 2026**. Change it in the Settings tab.
 
 ## The dashboard
 
-**Pipeline** — the working list. Click a lead to open the side panel: contact details, every form answer, the source ad, the stage picker, and a **timeline** where notes and stage moves live in the same stream. A note typed before picking a stage is attached to that move, so the reason and the move land together.
+**Pipeline** — the working list. Change a lead's stage from a coloured dropdown **on the row itself**, and add a note from the row too: the two things a broker does a hundred times a day never cost a click into a panel. Open a lead when you want the whole story — contact details, every form answer in the form's own wording, the source ad, and a **timeline** where notes and stage moves live in the same stream. A note typed before picking a stage is attached to that move, so the reason and the move land together.
 
 **Analytics**
 
@@ -65,7 +65,24 @@ Default cutoff: **1 Aug 2026**. Change it in the Settings tab.
 
 **Settings** — the cutoff date and the per-campaign switches.
 
+**Language** — an EN / ع switch in the header flips the whole interface, including direction. It changes the *chrome* only: headings, buttons, column names. Lead data is never translated — see below.
+
 There is no "sync now" button. Leads arrive on their own every 10 minutes; **Refresh** only re-reads what is already stored. Re-syncing can never duplicate a lead or overwrite feedback: `lead_id` is the primary key and inserts run with `ignoreDuplicates`.
+
+---
+
+## The form is shown in its own words
+
+Meta's lead payload is machine keys, not the text the customer read:
+
+```
+{ "payment_method": "still_exploring" }        ← what Meta sends
+  "تحب تدفع إزاي؟"  →  "لسه بستكشف وبسأل"        ← what the customer actually saw
+```
+
+The wording lives only on the form definition, so the sync stores each form's schema in `lead_forms` and `lib/labels.ts` looks the wording back up for display. **Nothing is translated** — an Arabic form shows Arabic, in the exact words it was written in, whichever interface language is selected.
+
+`raw_fields` deliberately keeps the keys. Keys are stable, so analytics can group by them even after the Arabic wording is edited.
 
 ---
 
@@ -149,13 +166,16 @@ app/
   api/notes/                lead notes timeline
   api/capi/replay/          retry failed events
 components/
-  LeadsView.tsx             the working list
+  LangProvider.tsx          EN/AR switch, direction, stage names
+  LeadsView.tsx             the working list — inline stage + inline notes
   LeadPanel.tsx             one lead: details, stages, timeline
   AnalyticsView.tsx         the analysis screen
   CampaignSettings.tsx      cutoff date + per-campaign switches
   ui.tsx                    shared primitives and formatters
 lib/
-  meta.ts                   Graph API, page token, campaigns, insights
+  meta.ts                   Graph API, page token, campaigns, insights, form schemas
+  i18n.ts                   interface strings — chrome only, never data
+  labels.ts                 Meta's keys → the form's own wording
   tracking.ts               which campaigns are tracked
   capi.ts                   build and send events
   stages.ts                 the pipeline — edit here

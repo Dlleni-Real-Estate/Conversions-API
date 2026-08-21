@@ -26,7 +26,10 @@ export type Status =
 
 export type StageDef = {
   status: Status;
+  /** English label. */
   label: string;
+  /** Arabic label — the same stage, written for the team that uses it. */
+  labelAr: string;
   /** Meta event name — null means the change stays internal. */
   event: string | null;
   /**
@@ -41,52 +44,62 @@ export type StageDef = {
   /** Accent used by the funnel and charts. */
   accent: string;
   hint?: string;
+  hintAr?: string;
 };
 
 export const STAGES: StageDef[] = [
   {
     status: "new",
     label: "New",
+    labelAr: "جديد",
     event: null,
     rank: 0,
     positive: null,
     color: "bg-slate-100 text-slate-600 border-slate-200",
     accent: "#94a3b8",
     hint: "Nobody has touched this lead yet",
+    hintAr: "لسه محدش مسكه",
   },
   {
     status: "contacted",
     label: "Contacted",
+    labelAr: "اتكلمنا معاه",
     event: "Contacted",
     rank: 1,
     positive: null,
     color: "bg-sky-50 text-sky-700 border-sky-200",
     accent: "#0ea5e9",
     hint: "Reached them on the phone",
+    hintAr: "كلّمناه على التليفون",
   },
   {
     status: "no_answer",
     label: "No answer",
+    labelAr: "مردّش",
     event: "NoAnswer",
     rank: -1,
     positive: false,
     color: "bg-amber-50 text-amber-800 border-amber-200",
     accent: "#f59e0b",
     hint: "Called, nobody picked up",
+    hintAr: "اتصلنا وما ردّش",
   },
   {
     status: "qualified",
     label: "Qualified",
+    labelAr: "مؤهّل",
     event: "Qualified",
     rank: 2,
     positive: true,
     color: "bg-emerald-50 text-emerald-700 border-emerald-200",
     accent: "#10b981",
     hint: "Real budget, real intent",
+    hintAr: "عنده ميزانية ونيّة شراء",
   },
   {
     status: "meeting_booked",
     label: "Meeting booked",
+    labelAr: "حجز اجتماع",
     event: "MeetingBooked",
     rank: 3,
     positive: true,
@@ -96,6 +109,7 @@ export const STAGES: StageDef[] = [
   {
     status: "meeting_done",
     label: "Meeting done",
+    labelAr: "تم الاجتماع",
     event: "MeetingDone",
     rank: 4,
     positive: true,
@@ -105,6 +119,7 @@ export const STAGES: StageDef[] = [
   {
     status: "site_visit_booked",
     label: "Site visit booked",
+    labelAr: "حجز معاينة",
     event: "SiteVisitBooked",
     rank: 5,
     positive: true,
@@ -114,6 +129,7 @@ export const STAGES: StageDef[] = [
   {
     status: "site_visit_done",
     label: "Site visit done",
+    labelAr: "تمت المعاينة",
     event: "SiteVisitDone",
     rank: 6,
     positive: true,
@@ -123,32 +139,38 @@ export const STAGES: StageDef[] = [
   {
     status: "eoi",
     label: "EOI",
+    labelAr: "وقّع EOI",
     event: "EOI",
     rank: 7,
     positive: true,
     color: "bg-teal-100 text-teal-800 border-teal-300",
     accent: "#0d9488",
     hint: "Expression of interest signed",
+    hintAr: "وقّع خطاب إبداء الرغبة",
   },
   {
     status: "reservation",
     label: "Reservation",
+    labelAr: "عمل ريزيرفيشن",
     event: "Reservation",
     rank: 8,
     positive: true,
     color: "bg-green-600 text-white border-green-700",
     accent: "#16a34a",
     hint: "Money down — the outcome everything else is trying to predict",
+    hintAr: "دفع — ده الهدف اللي كل حاجة تانية بتحاول تتنبأ بيه",
   },
   {
     status: "disqualified",
     label: "Disqualified",
+    labelAr: "مستبعد",
     event: "Disqualified",
     rank: -2,
     positive: false,
     color: "bg-red-50 text-red-700 border-red-200",
     accent: "#ef4444",
     hint: "Wrong number, no budget, not interested",
+    hintAr: "رقم غلط، مفيش ميزانية، مش مهتم",
   },
 ];
 

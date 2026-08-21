@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 import { isAuthed } from "@/lib/auth";
 import { rankOf, type Status } from "@/lib/stages";
+import { buildDictionary } from "@/lib/labels";
+import type { FormSchema } from "@/lib/meta";
 
 export const dynamic = "force-dynamic";
 
@@ -69,9 +71,14 @@ export async function GET(req: NextRequest) {
     }, {});
   }
 
+  // The wording of the forms, so the client can show the question and answer
+  // exactly as the customer read them instead of Meta's machine keys.
+  const { data: forms } = await db.from("lead_forms").select("form_id, name, locale, questions");
+
   return NextResponse.json({
     ok: true,
     count,
+    dictionary: buildDictionary((forms ?? []) as unknown as FormSchema[]),
     leads: leads.map((l) => ({ ...l, note_count: noteCounts[l.lead_id] ?? 0, rank: rankOf(l.status) })),
   });
 }

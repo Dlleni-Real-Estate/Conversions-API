@@ -3,31 +3,34 @@
 import { useMemo, useState } from "react";
 import { STAGES, STAGE_BY_STATUS, type Status } from "@/lib/stages";
 import { Bar, Card, Columns, Empty, Stat, Td, Th, fmtDay, fmtInt, fmtMoney, fmtMoney2, fmtPct } from "./ui";
+import { useLang } from "./LangProvider";
 import type { Analytics, AdRow } from "./types";
 
 type SortKey = keyof AdRow;
 
 /** Columns of the ad table, so header and body can never drift apart. */
-const AD_COLUMNS: { key: SortKey; label: string; kind: "text" | "int" | "money" | "money2" | "pct" | "num" }[] = [
-  { key: "ad_name", label: "Ad", kind: "text" },
-  { key: "spend", label: "Spend", kind: "money" },
-  { key: "reach", label: "Reach", kind: "int" },
-  { key: "impressions", label: "Impr.", kind: "int" },
-  { key: "frequency", label: "Freq.", kind: "num" },
-  { key: "ctr", label: "CTR", kind: "pct" },
-  { key: "cpm", label: "CPM", kind: "money2" },
-  { key: "leads", label: "Leads", kind: "int" },
-  { key: "cost_per_lead", label: "Cost / lead", kind: "money2" },
-  { key: "qualified", label: "Qual.", kind: "int" },
-  { key: "qualified_pct", label: "Qual. %", kind: "pct" },
-  { key: "cost_per_qualified", label: "Cost / qual.", kind: "money2" },
-  { key: "site_visits_done", label: "Visits", kind: "int" },
-  { key: "no_show_pct", label: "No-show", kind: "pct" },
-  { key: "reservations", label: "Resv.", kind: "int" },
-  { key: "cost_per_reservation", label: "Cost / resv.", kind: "money2" },
+type ColKind = "text" | "int" | "money" | "money2" | "pct" | "num";
+const AD_COLUMNS: { key: SortKey; tk: keyof ReturnType<typeof useLang>["t"]; kind: ColKind }[] = [
+  { key: "ad_name", tk: "tAd", kind: "text" },
+  { key: "spend", tk: "tSpend", kind: "money" },
+  { key: "reach", tk: "tReach", kind: "int" },
+  { key: "impressions", tk: "tImpr", kind: "int" },
+  { key: "frequency", tk: "tFreq", kind: "num" },
+  { key: "ctr", tk: "tCtr", kind: "pct" },
+  { key: "cpm", tk: "tCpm", kind: "money2" },
+  { key: "leads", tk: "tLeads", kind: "int" },
+  { key: "cost_per_lead", tk: "tCostLead", kind: "money2" },
+  { key: "qualified", tk: "tQual", kind: "int" },
+  { key: "qualified_pct", tk: "tQualPct", kind: "pct" },
+  { key: "cost_per_qualified", tk: "tCostQual", kind: "money2" },
+  { key: "site_visits_done", tk: "tVisits", kind: "int" },
+  { key: "no_show_pct", tk: "tNoShow", kind: "pct" },
+  { key: "reservations", tk: "tResv", kind: "int" },
+  { key: "cost_per_reservation", tk: "tCostResv", kind: "money2" },
 ];
 
 export default function AnalyticsView({ data }: { data: Analytics }) {
+  const { t, s: stageName, locale } = useLang();
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "spend", dir: -1 });
   const { kpis, currency } = data;
 
@@ -48,63 +51,65 @@ export default function AnalyticsView({ data }: { data: Analytics }) {
   }, [data.ads, sort]);
 
   const maxFunnel = data.funnel[0]?.count ?? 1;
-  const statusRows = STAGES.map((s) => ({ ...s, count: data.byStatus?.[s.status as Status] ?? 0 })).filter(
-    (s) => s.count > 0
+  const statusRows = STAGES.map((st) => ({ ...st, count: data.byStatus?.[st.status as Status] ?? 0 })).filter(
+    (st) => st.count > 0
   );
-  const totalStatus = statusRows.reduce((sum, s) => sum + s.count, 0);
+  const totalStatus = statusRows.reduce((sum, st) => sum + st.count, 0);
 
   return (
     <div className="space-y-6">
       {/* ── Money first: these are the numbers that decide budget ─────────── */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 xl:grid-cols-6">
-        <Stat label="Spend" value={fmtMoney(kpis.spend, currency)} sub={`${fmtInt(kpis.reach)} reached`} />
-        <Stat label="Leads" value={fmtInt(kpis.leads)} sub={`${fmtInt(kpis.untouched)} untouched`} />
-        <Stat label="Cost / lead" value={fmtMoney2(kpis.cost_per_lead, currency)} />
+        <Stat label={t.spend} value={fmtMoney(kpis.spend, currency)} sub={`${fmtInt(kpis.reach)} ${t.reached}`} />
+        <Stat label={t.leads} value={fmtInt(kpis.leads)} sub={`${fmtInt(kpis.untouched)} ${t.untouched}`} />
+        <Stat label={t.costPerLead} value={fmtMoney2(kpis.cost_per_lead, currency)} />
         <Stat
-          label="Qualified"
+          label={t.qualified}
           value={fmtInt(kpis.qualified)}
-          sub={`${fmtPct(kpis.qualified_pct)} of leads`}
+          sub={`${fmtPct(kpis.qualified_pct)} ${t.ofLeads}`}
           tone="good"
         />
-        <Stat label="Cost / qualified" value={fmtMoney2(kpis.cost_per_qualified, currency)} tone="good" />
+        <Stat label={t.costPerQualified} value={fmtMoney2(kpis.cost_per_qualified, currency)} tone="good" />
         <Stat
-          label="Reservations"
+          label={t.reservations}
           value={fmtInt(kpis.reservations)}
-          sub={kpis.cost_per_reservation ? `${fmtMoney2(kpis.cost_per_reservation, currency)} each` : undefined}
+          sub={kpis.cost_per_reservation ? `${fmtMoney2(kpis.cost_per_reservation, currency)} ${t.each}` : undefined}
           tone={kpis.reservations > 0 ? "good" : "muted"}
         />
       </div>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 xl:grid-cols-6">
-        <Stat label="Impressions" value={fmtInt(kpis.impressions)} />
-        <Stat label="Clicks" value={fmtInt(kpis.clicks)} sub={kpis.ctr ? `${kpis.ctr}% CTR` : undefined} />
-        <Stat label="Site visits" value={fmtInt(kpis.site_visits)} />
-        <Stat label="Cost / site visit" value={fmtMoney2(kpis.cost_per_site_visit, currency)} />
+        <Stat label={t.impressions} value={fmtInt(kpis.impressions)} />
+        <Stat label={t.clicks} value={fmtInt(kpis.clicks)} sub={kpis.ctr ? `${kpis.ctr}% ${t.ctrSuffix}` : undefined} />
+        <Stat label={t.siteVisits} value={fmtInt(kpis.site_visits)} />
+        <Stat label={t.costPerSiteVisit} value={fmtMoney2(kpis.cost_per_site_visit, currency)} />
         <Stat
-          label="Median response"
+          label={t.medianResponse}
           value={kpis.median_response_hours === null ? "—" : `${kpis.median_response_hours}h`}
-          sub={kpis.contacted_within_hour_pct === null ? undefined : `${kpis.contacted_within_hour_pct}% within 1h`}
+          sub={kpis.contacted_within_hour_pct === null ? undefined : t.withinHour(kpis.contacted_within_hour_pct)}
           tone={kpis.median_response_hours !== null && kpis.median_response_hours > 4 ? "bad" : "default"}
         />
         <Stat
-          label="Reservation value"
+          label={t.reservationValue}
           value={kpis.reservation_value ? fmtMoney(kpis.reservation_value, currency) : "—"}
-          sub={kpis.roas ? `${kpis.roas}× on spend` : undefined}
+          sub={kpis.roas ? t.onSpend(kpis.roas) : undefined}
         />
       </div>
 
       <div className="grid gap-6 xl:grid-cols-3">
         {/* ── Funnel ───────────────────────────────────────────────────────── */}
         <Card
-          title="Pipeline funnel"
-          subtitle="Each step counts every lead that reached it or went past it"
+          title={t.funnelTitle}
+          subtitle={t.funnelSub}
           className="xl:col-span-2"
         >
           <div className="space-y-3 px-5 py-4">
             {data.funnel.map((step, i) => (
               <div key={step.status}>
                 <div className="flex items-baseline justify-between gap-3 text-sm">
-                  <span className="font-medium text-slate-800">{step.label}</span>
+                  <span className="font-medium text-slate-800">
+                    {step.status === "lead" ? t.leads : stageName(step.status as Status)}
+                  </span>
                   <span className="flex items-baseline gap-3 tabular-nums">
                     <span className="font-semibold">{fmtInt(step.count)}</span>
                     <span className="w-12 text-right text-xs text-slate-400">{fmtPct(step.ofTotal)}</span>
@@ -113,7 +118,7 @@ export default function AnalyticsView({ data }: { data: Analytics }) {
                         i === 0 ? "text-transparent" : step.fromPrev !== null && step.fromPrev < 30 ? "text-red-500" : "text-slate-500"
                       }`}
                     >
-                      {i === 0 ? "—" : `${fmtPct(step.fromPrev)} of prev`}
+                      {i === 0 ? "—" : `${fmtPct(step.fromPrev)} ${t.ofPrev}`}
                     </span>
                   </span>
                 </div>
@@ -126,18 +131,18 @@ export default function AnalyticsView({ data }: { data: Analytics }) {
         </Card>
 
         {/* ── Where everyone is sitting right now ──────────────────────────── */}
-        <Card title="Current status" subtitle="Every lead sits in exactly one">
+        <Card title={t.currentStatus} subtitle={t.currentStatusSub}>
           {statusRows.length === 0 ? (
-            <Empty>No leads yet.</Empty>
+            <Empty>{t.noLeads}</Empty>
           ) : (
             <div className="space-y-2.5 px-5 py-4">
-              {statusRows.map((s) => (
-                <div key={s.status} className="flex items-center gap-3">
-                  <span className="w-32 shrink-0 truncate text-sm text-slate-700">{s.label}</span>
+              {statusRows.map((st) => (
+                <div key={st.status} className="flex items-center gap-3">
+                  <span className="w-32 shrink-0 truncate text-sm text-slate-700">{stageName(st.status)}</span>
                   <div className="flex-1">
-                    <Bar value={s.count} max={totalStatus} color={s.accent} />
+                    <Bar value={st.count} max={totalStatus} color={st.accent} />
                   </div>
-                  <span className="w-8 text-right text-sm font-medium tabular-nums">{s.count}</span>
+                  <span className="w-8 text-end text-sm font-medium tabular-nums">{st.count}</span>
                 </div>
               ))}
             </div>
@@ -147,11 +152,11 @@ export default function AnalyticsView({ data }: { data: Analytics }) {
 
       {/* ── Per-ad performance ─────────────────────────────────────────────── */}
       <Card
-        title="Ad performance"
-        subtitle="Delivery and spend from Meta, pipeline from your team — click a column to sort"
+        title={t.adPerf}
+        subtitle={t.adPerfSub}
       >
         {ads.length === 0 ? (
-          <Empty>No ad data yet. It arrives with the next sync.</Empty>
+          <Empty>{t.noAdData}</Empty>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -165,8 +170,8 @@ export default function AnalyticsView({ data }: { data: Analytics }) {
                         }
                         className="hover:text-slate-900"
                       >
-                        {c.label}
-                        {sort.key === c.key && <span className="ml-0.5">{sort.dir === -1 ? "↓" : "↑"}</span>}
+                        {t[c.tk] as string}
+                        {sort.key === c.key && <span className="ms-0.5">{sort.dir === -1 ? "↓" : "↑"}</span>}
                       </button>
                     </Th>
                   ))}
@@ -221,14 +226,15 @@ export default function AnalyticsView({ data }: { data: Analytics }) {
 
       <div className="grid gap-6 xl:grid-cols-3">
         {/* ── Volume over time ─────────────────────────────────────────────── */}
-        <Card title="Leads per day" subtitle="Green is the qualified share" className="xl:col-span-2">
+        <Card title={t.perDay} subtitle={t.perDaySub} className="xl:col-span-2">
           {data.daily.length === 0 ? (
-            <Empty>Nothing to plot yet.</Empty>
+            <Empty>{t.nothingToPlot}</Empty>
           ) : (
             <div className="px-4 py-5">
               <Columns
+                secondaryLabel={t.qualShort}
                 data={data.daily.slice(-30).map((d) => ({
-                  label: fmtDay(d.date),
+                  label: fmtDay(d.date, locale),
                   value: d.leads,
                   secondary: d.qualified,
                 }))}
@@ -237,7 +243,7 @@ export default function AnalyticsView({ data }: { data: Analytics }) {
           )}
         </Card>
 
-        <Card title="Platform" subtitle="Where the form was filled">
+        <Card title={t.platform} subtitle={t.platformSub}>
           {data.platforms.length === 0 ? (
             <Empty>—</Empty>
           ) : (
@@ -246,7 +252,7 @@ export default function AnalyticsView({ data }: { data: Analytics }) {
                 <div key={p.platform} className="flex items-center justify-between text-sm">
                   <span className="uppercase text-slate-700">{p.platform}</span>
                   <span className="tabular-nums text-slate-500">
-                    {fmtInt(p.leads)} · <span className="text-emerald-600">{fmtPct(p.qualified_pct)} qual.</span>
+                    {fmtInt(p.leads)} · <span className="text-emerald-600">{fmtPct(p.qualified_pct)} {t.qualShort}</span>
                   </span>
                 </div>
               ))}
@@ -257,25 +263,23 @@ export default function AnalyticsView({ data }: { data: Analytics }) {
 
       {/* ── Do the qualifier questions actually qualify? ────────────────────── */}
       <Card
-        title="What the form answers predict"
-        subtitle="If an answer does not separate good leads from bad, the question is not earning its place on the form"
+        title={t.segmentsTitle}
+        subtitle={t.segmentsSub}
       >
         {data.segments.length === 0 ? (
-          <Empty>Not enough repeated answers yet.</Empty>
+          <Empty>{t.notEnoughAnswers}</Empty>
         ) : (
           <div className="grid gap-6 px-5 py-4 lg:grid-cols-2">
             {data.segments.map((seg) => {
               const max = Math.max(...seg.values.map((v) => v.leads), 1);
               return (
                 <div key={seg.field}>
-                  <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    {seg.field.replace(/_/g, " ")}
-                  </h3>
+                  <h3 className="text-xs font-semibold text-slate-600">{seg.label || seg.field}</h3>
                   <div className="mt-2.5 space-y-2.5">
                     {seg.values.map((v) => (
                       <div key={v.value}>
                         <div className="flex items-baseline justify-between gap-3 text-sm">
-                          <span className="truncate text-slate-700">{v.value.replace(/_/g, " ")}</span>
+                          <span className="truncate text-slate-700">{v.label || v.value}</span>
                           <span className="shrink-0 tabular-nums text-slate-500">
                             {v.leads} ·{" "}
                             <span className={Number(v.qualified_pct) >= 30 ? "text-emerald-600" : "text-slate-400"}>
