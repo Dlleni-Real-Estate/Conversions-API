@@ -122,11 +122,26 @@ Scheduling lives in Supabase `pg_cron` (Vercel Hobby only allows daily crons):
 
 ---
 
-## Turning on Conversion Leads
+## Turning on qualified leads
 
-Meta needs volume before the optimisation is worth switching on — roughly **250 leads/month**, with the chosen stage happening **within 28 days** of the lead and converting at **between 1% and 40%**. That last one matters most in practice: if `Qualified` comes out at 60% of all leads it separates nothing, and you should optimise for a deeper stage such as *Site visit done*.
+Meta renamed this. In Ads Manager it is now **Maximize number of qualified leads**, reached at the ad set level: **Conversions → Leads dropdown → Qualified leads**. Older writing (including earlier versions of this file) calls it "conversion leads".
 
-When you are there: **Ads Manager → Ad set → Performance goal → Maximise number of conversion leads → Dataset: Dlleni CRM Events → Conversion event:** pick one of the names above. An event only appears in that dropdown once it has actually reached the dataset, which is why the team should start setting stages now.
+**This integration is what keeps the goal available.** Meta's own page states it plainly: from **April 2026** the qualified-leads goal is not available for new campaign creation without a Conversions API integration, and **existing campaigns are impacted beginning August 2026**. The CRM feed is no longer an optimisation on top — it is the entry ticket.
+
+### How much volume is actually required
+
+**Meta does not publish a minimum lead count for this goal.** The number that matters is the ordinary learning phase, which Meta does document: an ad set exits it after **about 50 results in a week**. When the optimisation event is `Qualified`, a "result" is a *qualified* lead — not a form fill. So the target is roughly **50 qualified leads a week**, and the raw lead volume needed to produce them depends on the qualification rate the Analytics tab shows.
+
+Two numbers that are often quoted here and should not be:
+
+- **"200 or 250 leads a month"** — not from Meta. 200 is just 50/week × 4 restated; 250 comes from third-party blogs.
+- **"100+ conversions in 14 days, 5 unique values"** — real, but those are Meta's requirements for a *different* goal, **Maximize value of conversions**, not for qualified leads.
+
+Meta's own reported result for this setup: lead ads using Conversions API for CRM with the qualified-leads goal on instant forms saw **21% lower cost per quality lead** than the plain leads goal.
+
+### Choosing the event
+
+An event only appears in the dropdown once it has actually reached the dataset, which is why the team should start setting stages now. Pick a stage that genuinely separates: if `Qualified` turns out to be most of your leads it discriminates nothing, and a deeper stage such as `SiteVisitDone` is the better target. The **Qual. %** column in Analytics is what tells you which.
 
 > Also build a **Lookalike from the leads that reserved**, not from all leads. That is the strongest audience this data will ever produce.
 
@@ -150,7 +165,7 @@ When you are there: **Ads Manager → Ad set → Performance goal → Maximise n
 
 **8. Campaign-scoped, not form-scoped.** A form is not owned by a campaign — the same form can run under several — so filtering by form gives a dirty result. Walking campaign → ads → `/{ad-id}/leads` also hands us the campaign and ad names for free, so they are right even when Meta omits them from the lead object.
 
-**9. The CRM contract.** `action_source: "system_generated"`, raw `user_data.lead_id`, `custom_data.lead_event_source` and `custom_data.event_source: "crm"` must all be present on **every** event. Without them Meta accepts the event (`200`, `events_received: 1`) but treats it as a plain custom event that never feeds Conversion Leads.
+**9. The CRM contract.** `action_source: "system_generated"`, raw `user_data.lead_id`, `custom_data.lead_event_source` and `custom_data.event_source: "crm"` must all be present on **every** event. Without them Meta accepts the event (`200`, `events_received: 1`) but treats it as a plain custom event that never feeds the qualified-leads optimisation.
 
 ---
 
