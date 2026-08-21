@@ -15,7 +15,7 @@ The sync does **not** sweep the Page's forms. It walks **campaign → ads → le
 
 | Stage | Meta event | Meaning |
 |---|---|---|
-| New | *(none — Meta already fired `Lead`)* | Nobody has touched it |
+| New | **`RawLead`** — sent on sync for every lead | Nobody has touched it. Meta needs this as the funnel's base |
 | Contacted | `Contacted` | Reached them on the phone |
 | No answer | `NoAnswer` | Called, nobody picked up |
 | **Qualified** | **`Qualified`** | Real budget, real intent |
@@ -130,14 +130,16 @@ Meta renamed this. In Ads Manager it is now **Maximize number of qualified leads
 
 ### How much volume is actually required
 
-**Meta does not publish a minimum lead count for this goal.** The number that matters is the ordinary learning phase, which Meta does document: an ad set exits it after **about 50 results in a week**. When the optimisation event is `Qualified`, a "result" is a *qualified* lead — not a form fill. So the target is roughly **50 qualified leads a week**, and the raw lead volume needed to produce them depends on the qualification rate the Analytics tab shows.
+Meta states this in its **developer** documentation (the Business Help Centre does not repeat it, which is what makes it easy to get wrong). Under *Check if your business is a good fit*:
 
-Two numbers that are often quoted here and should not be:
+- **Generate at least 200 leads per month**
+- Upload data **at least once per day** — this app syncs every 10 minutes
+- The stage you optimise for **occurs within 28 days** of the lead
+- The stage you optimise for has a **conversion rate between 1% and 40%**
 
-- **"200 or 250 leads a month"** — not from Meta. 200 is just 50/week × 4 restated; 250 comes from third-party blogs.
-- **"100+ conversions in 14 days, 5 unique values"** — real, but those are Meta's requirements for a *different* goal, **Maximize value of conversions**, not for qualified leads.
+The 1%–40% rule is the one that bites: it is measured against the raw-lead stage, so if `Qualified` comes out at 60% of leads it separates nothing and the goal will not train on it. Pick something deeper. The **Qual. %** column in Analytics is what tells you.
 
-Meta's own reported result for this setup: lead ads using Conversions API for CRM with the qualified-leads goal on instant forms saw **21% lower cost per quality lead** than the plain leads goal.
+Meta's own project timeline for this integration: ~1–2 days data validation, then a **2–4 week learning period** before the full performance lift shows. Total time to value ~3–4 weeks.
 
 ### Choosing the event
 
@@ -166,6 +168,8 @@ An event only appears in the dropdown once it has actually reached the dataset, 
 **8. Campaign-scoped, not form-scoped.** A form is not owned by a campaign — the same form can run under several — so filtering by form gives a dirty result. Walking campaign → ads → `/{ad-id}/leads` also hands us the campaign and ad names for free, so they are right even when Meta omits them from the lead object.
 
 **9. The CRM contract.** `action_source: "system_generated"`, raw `user_data.lead_id`, `custom_data.lead_event_source` and `custom_data.event_source: "crm"` must all be present on **every** event. Without them Meta accepts the event (`200`, `events_received: 1`) but treats it as a plain custom event that never feeds the qualified-leads optimisation.
+
+**10. The raw-lead stage — the easiest thing to get wrong.** Meta fires its own `Lead` event when the form is submitted, and it is tempting to conclude the CRM does not need to report the lead again. It does. Meta's spec: *"If your campaigns generate 100 leads, then Meta expects 100 'Raw Lead' events uploaded to represent the first lead stage."* It is the **denominator** — the conversion rate of every stage above it, and therefore the 1%–40% eligibility rule, is measured against it. This app sends it as `RawLead` on sync (named so it cannot be confused with Meta's own `Lead` in Events Manager), as a self-healing sweep over the last 7 days — Meta's backfill limit, and it discards events timestamped before the lead existed.
 
 ---
 

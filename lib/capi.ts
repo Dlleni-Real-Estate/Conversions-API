@@ -134,6 +134,57 @@ export async function sendLeadEvent(input: CapiInput): Promise<SendResult> {
   return result;
 }
 
+/**
+ * Ship many events in one call. Meta caps a batch at 1,000 events and discards
+ * the WHOLE batch on an error inside it, so we keep chunks small and let a bad
+ * chunk fail on its own without taking the good ones with it.
+ *
+ * Used for the raw-lead stage, where a backfill can mean hundreds of events and
+ * one-at-a-time would time the function out.
+ */
+export async function sendLeadEvents(inputs: CapiInput[], chunkSize = 100) {
+  if (inputs.length === 0) return { attempted: 0, sent: 0, failed: 0 };
+  const db = supabaseAdmin();
+  let sent = 0;
+  let failed = 0;
+
+  for (let i = 0; i < inputs.length; i += chunkSize) {
+    const slice = inputs.slice(i, i + chunkSize);
+    const events = slice.map(buildEvent);
+
+    // Logged before the network call, so a crash mid-flight leaves rows the
+    // replay cron can pick up rather than events that quietly never happened.
+    await db.from("capi_events").upsert(
+      events.map((e, n) => ({
+        lead_id: slice[n].leadId,
+        event_name: slice[n].eventName,
+        event_id: e.event_id,
+        event_time: new Date((e.event_time as number) * 1000).toISOString(),
+        payload: e,
+        status: "pending",
+      })),
+      { onConflict: "event_id" }
+    );
+
+    const result = await postEvents(events);
+    const patch = {
+      status: result.ok ? "sent" : "failed",
+      response: "response" in result ? (result.response as object) : null,
+      last_error: result.ok ? null : result.error,
+      sent_at: result.ok ? new Date().toISOString() : null,
+    };
+    await db
+      .from("capi_events")
+      .update(patch)
+      .in("event_id", events.map((e) => e.event_id));
+
+    if (result.ok) sent += slice.length;
+    else failed += slice.length;
+  }
+
+  return { attempted: inputs.length, sent, failed };
+}
+
 /** Retry anything left pending/failed. Called by the hourly cron. */
 export async function replayFailed(limit = 100) {
   const db = supabaseAdmin();

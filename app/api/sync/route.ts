@@ -13,6 +13,8 @@ import {
 import { resolveCampaigns } from "@/lib/tracking";
 import { supabaseAdmin } from "@/lib/supabase";
 import { isAuthed } from "@/lib/auth";
+import { sendLeadEvents } from "@/lib/capi";
+import { STAGE_BY_STATUS } from "@/lib/stages";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -43,6 +45,7 @@ export async function GET(req: NextRequest) {
   let leadsFound = 0;
   let leadsNew = 0;
   let insightsRows = 0;
+  let rawLeadEvents = 0;
   const perCampaign: {
     campaign: string;
     ads: number;
@@ -147,6 +150,7 @@ export async function GET(req: NextRequest) {
         if (error) throw new Error(error.message);
         const n = inserted?.length ?? 0;
         leadsNew += n;
+
         perCampaign.push({
           campaign: campaign.name,
           ads: ads.length,
@@ -175,6 +179,9 @@ export async function GET(req: NextRequest) {
     // dashboard can show the Arabic question and answer instead of Meta's keys.
     const formsStored = await refreshFormSchemas(db, formIdsSeen);
 
+    // The raw-lead stage — the one thing that was missing.
+    rawLeadEvents = await sendMissingRawLeads(db);
+
     if (run?.id) {
       await db
         .from("sync_runs")
@@ -197,6 +204,7 @@ export async function GET(req: NextRequest) {
       leadsFound,
       leadsNew,
       insightsRows,
+      rawLeadEvents,
       formsStored,
       perCampaign,
     });
@@ -280,4 +288,60 @@ async function refreshFormSchemas(
 
   await db.from("lead_forms").upsert(schemas, { onConflict: "form_id" });
   return schemas.length;
+}
+
+/**
+ * Meta wants a raw-lead event for EVERY lead its campaigns produced, uploaded
+ * by us. Its own words: "If your campaigns generate 100 leads, then Meta
+ * expects 100 'Raw Lead' events uploaded to represent the first lead stage."
+ *
+ * This is not the Lead event Meta fires itself on form submit. It is the
+ * denominator: the conversion rate of every later stage — and therefore the
+ * 1%–40% eligibility rule — is measured against it. Without it the funnel Meta
+ * trains on has no base.
+ *
+ * Written as a sweep rather than a hook on insert, so it also heals leads that
+ * were stored before this existed. Bounded to the last 7 days because that is
+ * Meta's backfill limit: events older than that are discarded, and lying about
+ * event_time to get around it makes Meta discard the lot.
+ */
+async function sendMissingRawLeads(db: ReturnType<typeof supabaseAdmin>, limit = 200): Promise<number> {
+  const rawEvent = STAGE_BY_STATUS.new.event;
+  if (!rawEvent) return 0;
+
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 3600_000).toISOString();
+
+  const { data: recent } = await db
+    .from("leads")
+    .select("lead_id, phone, email")
+    .gte("submitted_at", sevenDaysAgo)
+    .order("submitted_at", { ascending: false })
+    .limit(limit);
+
+  if (!recent || recent.length === 0) return 0;
+
+  const { data: already } = await db
+    .from("capi_events")
+    .select("lead_id")
+    .eq("event_name", rawEvent)
+    .in("lead_id", recent.map((l: { lead_id: string }) => l.lead_id));
+
+  const done = new Set((already ?? []).map((r: { lead_id: string }) => r.lead_id));
+  const missing = recent.filter((l: { lead_id: string }) => !done.has(l.lead_id));
+  if (missing.length === 0) return 0;
+
+  const result = await sendLeadEvents(
+    missing.map((l: { lead_id: string; phone: string | null; email: string | null }) => ({
+      leadId: l.lead_id,
+      eventName: rawEvent,
+      // Now, not the submission time: "when the lead was received and
+      // processed", and safely after the generation time — Meta discards events
+      // timestamped before the lead existed.
+      eventTime: new Date(),
+      phone: l.phone ?? undefined,
+      email: l.email ?? undefined,
+    }))
+  ).catch(() => ({ attempted: 0, sent: 0, failed: 0 }));
+
+  return result.sent;
 }

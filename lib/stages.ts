@@ -54,7 +54,16 @@ export const STAGES: StageDef[] = [
     status: "new",
     label: "New",
     labelAr: "جديد",
-    event: null,
+    // Meta requires the raw-lead stage, and requires it from US — not from the
+    // Lead event it fires itself on form submit. Its words: "If your campaigns
+    // generate 100 leads, then Meta expects 100 'Raw Lead' events uploaded to
+    // represent the first lead stage." It is the denominator: without it Meta
+    // cannot compute the conversion rate of any stage above it, and the whole
+    // 1%–40% eligibility rule is measured against it.
+    //
+    // Named RawLead rather than Lead so it cannot be confused in Events Manager
+    // with Meta's own standard Lead event.
+    event: "RawLead",
     rank: 0,
     positive: null,
     color: "bg-slate-100 text-slate-600 border-slate-300",
