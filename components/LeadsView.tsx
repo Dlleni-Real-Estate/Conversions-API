@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { QUICK_MOVES, STAGES, STAGE_BY_STATUS, type Status } from "@/lib/stages";
+import { STAGES, STAGE_BY_STATUS, type Status } from "@/lib/stages";
 import { answerLabel, questionLabel, type FormDictionary } from "@/lib/labels";
 import { Card, Empty, Td, Th, fmtAgo, fmtDate } from "./ui";
 import { useLang } from "./LangProvider";
@@ -186,8 +186,11 @@ export default function LeadsView({
         <Empty>{loading ? t.loading : t.noLeads}</Empty>
       ) : (
         <>
-          {/* ── Phone: one card per lead ─────────────────────────────────── */}
-          <ul className="divide-y divide-slate-200 md:hidden">
+          {/* ── Phone: one real card per lead ────────────────────────────────
+              Separated cards, not a divided list: on a phone a run of rows
+              with hairlines between them reads as one long smear. Each card
+              gets its own edge, its own shadow, and air around it. */}
+          <ul className="space-y-3 bg-slate-100 p-3 md:hidden">
             {ordered.map((lead) => {
               const stage = STAGE_BY_STATUS[lead.status];
               const stale = isStale(lead);
@@ -195,87 +198,100 @@ export default function LeadsView({
                 <li
                   key={lead.lead_id}
                   onClick={() => onOpen(lead)}
-                  className={`relative px-4 py-3.5 ${lead.status === "new" ? "bg-white" : stage.soft}`}
+                  className="relative overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-card"
                 >
+                  {/* The stage colour lives on the edge, so the card surface
+                      stays white and the cards stay distinct from each other. */}
                   <span
-                    className="absolute inset-y-0 start-0 w-1"
+                    className="absolute inset-y-0 start-0 w-1.5"
                     style={{ background: stage.accent }}
                     aria-hidden
                   />
 
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        {stale && <span className="stale-dot h-2 w-2 shrink-0 rounded-full bg-orange-500" />}
-                        <span dir="auto" className="truncate font-semibold text-slate-900">
-                          {lead.full_name || t.unnamed}
-                        </span>
+                  <div className="ps-4 pe-3.5 py-3.5">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          {stale && <span className="stale-dot h-2 w-2 shrink-0 rounded-full bg-orange-500" />}
+                          <span dir="auto" className="truncate text-[15px] font-semibold text-slate-900">
+                            {lead.full_name || t.unnamed}
+                          </span>
+                        </div>
+                        {lead.phone && (
+                          <div dir="ltr" className="mt-0.5 text-start text-sm font-medium tabular-nums text-slate-600">
+                            +{lead.phone}
+                          </div>
+                        )}
                       </div>
-                      <div dir="auto" className="mt-0.5 text-[11px] text-slate-500">
-                        {fmtAgo(lead.submitted_at, lang)} · {lead.ad_name || "—"}
+                      <span
+                        className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                          stale ? "bg-orange-100 text-orange-700" : "bg-slate-100 text-slate-500"
+                        }`}
+                      >
+                        {fmtAgo(lead.submitted_at, lang)}
+                      </span>
+                    </div>
+
+                    <div dir="auto" className="mt-1 truncate text-[11px] text-slate-400">
+                      {lead.ad_name || "—"}
+                      {lead.form_name ? ` · ${lead.form_name}` : ""}
+                    </div>
+
+                    {preview(lead).length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {preview(lead).map((f) => (
+                          <span
+                            key={f.q}
+                            dir="auto"
+                            className="rounded-md bg-slate-50 px-1.5 py-0.5 text-[11px] text-slate-600 ring-1 ring-slate-200"
+                          >
+                            {f.a}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+
+                    <div className="mt-3 border-t border-slate-100 pt-3">
+                      <StageSelect lead={lead} className="w-full" />
+
+                      {lead.phone && (
+                        <div className="mt-2 grid grid-cols-2 gap-2">
+                          <a
+                            href={`https://wa.me/${lead.phone}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="tap flex items-center justify-center rounded-lg bg-emerald-600 text-sm font-semibold text-white shadow-card active:bg-emerald-700"
+                          >
+                            {t.whatsapp}
+                          </a>
+                          <a
+                            href={`tel:+${lead.phone}`}
+                            onClick={(e) => e.stopPropagation()}
+                            className="tap flex items-center justify-center rounded-lg border border-slate-300 bg-white text-sm font-semibold text-slate-700 shadow-card active:bg-slate-50"
+                          >
+                            {t.call}
+                          </a>
+                        </div>
+                      )}
+
+                      <div className="mt-2" onClick={(e) => e.stopPropagation()}>
+                        <NoteCell
+                          leadId={lead.lead_id}
+                          lastNote={lead.notes}
+                          count={lead.note_count ?? 0}
+                          pw={pw}
+                          onSaved={(body) =>
+                            onChanged(lead, { notes: body, note_count: (lead.note_count ?? 0) + 1 })
+                          }
+                        />
                       </div>
                     </div>
-                    {lead.phone && (
-                      <a
-                        href={`https://wa.me/${lead.phone}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        onClick={(e) => e.stopPropagation()}
-                        className="tap flex shrink-0 items-center rounded-lg bg-emerald-600 px-3 text-xs font-semibold text-white shadow-card active:bg-emerald-700"
-                      >
-                        {t.whatsapp}
-                      </a>
+
+                    {flash?.id === lead.lead_id && (
+                      <div className="mt-2 text-[11px] text-slate-500">{flash.text}</div>
                     )}
                   </div>
-
-                  {preview(lead).length > 0 && (
-                    <div className="mt-2 flex flex-wrap gap-1.5">
-                      {preview(lead).map((f) => (
-                        <span
-                          key={f.q}
-                          dir="auto"
-                          className="rounded-md bg-white/80 px-1.5 py-0.5 text-[11px] text-slate-600 ring-1 ring-slate-200"
-                        >
-                          {f.a}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* One tap for the four moves that account for most of the
-                      day; the full list stays in the select next to them. */}
-                  <div className="mt-3 flex flex-wrap items-center gap-1.5">
-                    {QUICK_MOVES.filter((q) => q !== lead.status).map((q) => (
-                      <button
-                        key={q}
-                        disabled={busyId === lead.lead_id}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          move(lead, q);
-                        }}
-                        className={`tap rounded-lg border px-2.5 text-xs font-medium disabled:opacity-40 ${STAGE_BY_STATUS[q].color}`}
-                      >
-                        {s(q)}
-                      </button>
-                    ))}
-                    <StageSelect lead={lead} className="min-w-[9rem] flex-1" />
-                  </div>
-
-                  <div className="mt-2.5" onClick={(e) => e.stopPropagation()}>
-                    <NoteCell
-                      leadId={lead.lead_id}
-                      lastNote={lead.notes}
-                      count={lead.note_count ?? 0}
-                      pw={pw}
-                      onSaved={(body) =>
-                        onChanged(lead, { notes: body, note_count: (lead.note_count ?? 0) + 1 })
-                      }
-                    />
-                  </div>
-
-                  {flash?.id === lead.lead_id && (
-                    <div className="mt-2 text-[11px] text-slate-500">{flash.text}</div>
-                  )}
                 </li>
               );
             })}

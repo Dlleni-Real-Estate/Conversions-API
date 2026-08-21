@@ -203,13 +203,6 @@ export const FUNNEL: Status[] = [
   "reservation",
 ];
 
-/**
- * The moves a broker reaches for most, in order. On a phone these become big
- * buttons instead of a dropdown, because a 10-item select on a touch screen is
- * where speed goes to die.
- */
-export const QUICK_MOVES: Status[] = ["contacted", "no_answer", "qualified", "disqualified"];
-
 /** Stages a broker can move a lead into (everything except the initial state). */
 export const ACTIONABLE: Status[] = STAGES.filter((s) => s.status !== "new").map((s) => s.status);
 
