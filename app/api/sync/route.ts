@@ -14,7 +14,7 @@ import { resolveCampaigns } from "@/lib/tracking";
 import { supabaseAdmin } from "@/lib/supabase";
 import { isAuthed } from "@/lib/auth";
 import { capiEventId, sendLeadEvents } from "@/lib/capi";
-import { STAGE_BY_STATUS } from "@/lib/stages";
+import { STAGES, STAGE_BY_STATUS, type Status } from "@/lib/stages";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -45,7 +45,7 @@ export async function GET(req: NextRequest) {
   let leadsFound = 0;
   let leadsNew = 0;
   let insightsRows = 0;
-  let rawLeadEvents = 0;
+  let stageEvents = 0;
   const perCampaign: {
     campaign: string;
     ads: number;
@@ -179,8 +179,8 @@ export async function GET(req: NextRequest) {
     // dashboard can show the Arabic question and answer instead of Meta's keys.
     const formsStored = await refreshFormSchemas(db, formIdsSeen);
 
-    // The raw-lead stage — the one thing that was missing.
-    rawLeadEvents = await sendMissingRawLeads(db);
+    // Every stage each lead has reached, for any that never made it to Meta.
+    stageEvents = await sendMissingStageEvents(db);
 
     if (run?.id) {
       await db
@@ -204,7 +204,7 @@ export async function GET(req: NextRequest) {
       leadsFound,
       leadsNew,
       insightsRows,
-      rawLeadEvents,
+      stageEvents,
       formsStored,
       perCampaign,
     });
@@ -291,63 +291,92 @@ async function refreshFormSchemas(
 }
 
 /**
- * Meta wants a raw-lead event for EVERY lead its campaigns produced, uploaded
- * by us. Its own words: "If your campaigns generate 100 leads, then Meta
- * expects 100 'Raw Lead' events uploaded to represent the first lead stage."
+ * Makes Meta's picture of each lead match ours, and heals it when they drift.
  *
- * This is not the Lead event Meta fires itself on form submit. It is the
- * denominator: the conversion rate of every later stage — and therefore the
- * 1%–40% eligibility rule — is measured against it. Without it the funnel Meta
- * trains on has no base.
+ * Two things have to be true for a lead to count, and neither is automatic:
  *
- * Written as a sweep rather than a hook on insert, so it also heals leads that
- * were stored before this existed. Bounded to the last 7 days because that is
- * Meta's backfill limit: events older than that are discarded, and lying about
- * event_time to get around it makes Meta discard the lot.
+ * 1. Meta wants a raw-lead event for EVERY lead its campaigns produced, uploaded
+ *    by us. Its own words: "If your campaigns generate 100 leads, then Meta
+ *    expects 100 'Raw Lead' events uploaded to represent the first lead stage."
+ *    This is not the Lead event Meta fires itself on form submit. It is the
+ *    denominator: every stage's conversion rate — and therefore the 1%–40%
+ *    eligibility rule — is measured against it.
+ *
+ * 2. Meta counts a lead as having reached a stage only if we sent THAT stage's
+ *    event, so a lead sitting at "Site visit done" needs the stages beneath it
+ *    too. /api/feedback sends the whole chain on the move; this is the net that
+ *    catches whatever that missed — a failed request, a lead stored before this
+ *    code existed, or a payload version bump that made earlier events wrong.
+ *
+ * Bounded to the last 7 days because that is Meta's backfill limit: older events
+ * are discarded, and lying about event_time to get around it makes Meta discard
+ * the lot. Bounded again by `maxEvents` so one sweep cannot outrun the function
+ * timeout — whatever is left is picked up by the next run ten minutes later.
  */
-async function sendMissingRawLeads(db: ReturnType<typeof supabaseAdmin>, limit = 200): Promise<number> {
-  const rawEvent = STAGE_BY_STATUS.new.event;
-  if (!rawEvent) return 0;
-
+async function sendMissingStageEvents(
+  db: ReturnType<typeof supabaseAdmin>,
+  limit = 200,
+  maxEvents = 400
+): Promise<number> {
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 3600_000).toISOString();
 
   const { data: recent } = await db
     .from("leads")
-    .select("lead_id, phone, email")
+    .select("lead_id, phone, email, status, deal_value")
     .gte("submitted_at", sevenDaysAgo)
     .order("submitted_at", { ascending: false })
     .limit(limit);
 
   if (!recent || recent.length === 0) return 0;
 
+  const leadIds = recent.map((l: { lead_id: string }) => l.lead_id);
+
   // Matched on event_id, not on event_name: the id carries the payload version,
   // so when a correction bumps that version this sweep sees the old rows as a
-  // different event and re-sends every lead once under the fixed payload.
+  // different event and re-sends under the fixed payload.
   const { data: already } = await db
     .from("capi_events")
     .select("event_id")
-    .eq("event_name", rawEvent)
     .eq("status", "sent")
-    .in("lead_id", recent.map((l: { lead_id: string }) => l.lead_id));
+    .in("lead_id", leadIds);
 
   const done = new Set((already ?? []).map((r: { event_id: string }) => r.event_id));
-  const missing = recent.filter(
-    (l: { lead_id: string }) => !done.has(capiEventId(l.lead_id, rawEvent))
-  );
+
+  const now = Date.now();
+  const missing: Parameters<typeof sendLeadEvents>[0] = [];
+
+  for (const lead of recent as {
+    lead_id: string;
+    phone: string | null;
+    email: string | null;
+    status: Status;
+    deal_value: number | null;
+  }[]) {
+    const reached = STAGE_BY_STATUS[lead.status]?.rank ?? 0;
+    const chain = STAGES.filter(
+      (st) => st.event && (st.rank === 0 || (reached > 0 ? st.rank <= reached : st.rank === reached))
+    ).sort((a, b) => a.rank - b.rank);
+
+    chain.forEach((st, i) => {
+      if (missing.length >= maxEvents) return;
+      if (done.has(capiEventId(lead.lead_id, st.event as string))) return;
+      missing.push({
+        leadId: lead.lead_id,
+        eventName: st.event as string,
+        // Now, not the submission time: "when the lead was received and
+        // processed", and safely after the generation time — Meta discards
+        // events timestamped before the lead existed. Spaced so the order Meta
+        // reads is the order the lead walked.
+        eventTime: new Date(now - (chain.length - 1 - i) * 1000),
+        phone: lead.phone ?? undefined,
+        email: lead.email ?? undefined,
+        value: st.status === "reservation" ? lead.deal_value : null,
+      });
+    });
+  }
+
   if (missing.length === 0) return 0;
 
-  const result = await sendLeadEvents(
-    missing.map((l: { lead_id: string; phone: string | null; email: string | null }) => ({
-      leadId: l.lead_id,
-      eventName: rawEvent,
-      // Now, not the submission time: "when the lead was received and
-      // processed", and safely after the generation time — Meta discards events
-      // timestamped before the lead existed.
-      eventTime: new Date(),
-      phone: l.phone ?? undefined,
-      email: l.email ?? undefined,
-    }))
-  ).catch(() => ({ attempted: 0, sent: 0, failed: 0 }));
-
+  const result = await sendLeadEvents(missing).catch(() => ({ attempted: 0, sent: 0, failed: 0 }));
   return result.sent;
 }
