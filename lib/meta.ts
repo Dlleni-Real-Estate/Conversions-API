@@ -16,12 +16,61 @@ function requireEnv(name: string): string {
   return v;
 }
 
-export const metaConfig = () => ({
-  token: requireEnv("META_ACCESS_TOKEN"),
-  pageId: requireEnv("META_PAGE_ID"),
-  datasetId: requireEnv("META_DATASET_ID"),
-  testEventCode: process.env.META_TEST_EVENT_CODE || undefined,
-});
+/**
+ * ── Hard scope lock ────────────────────────────────────────────────────────
+ * Every CAPI event Dlleni sends goes to exactly ONE dataset:
+ *   "Dlleni CRM Events" (1718089652564651)
+ * which is connected to exactly ONE ad account:
+ *   "dlleni ads one" (736420925136885)
+ *
+ * A dataset that is not connected to the ad account still returns HTTP 200 and
+ * `events_received: 1` — the signal simply never reaches the account. That silent
+ * failure is the whole reason this check exists: a wrong META_DATASET_ID must
+ * crash loudly at startup, not look like success for weeks.
+ */
+export const ALLOWED_DATASET_ID = "1718089652564651";    // Dlleni CRM Events
+export const ALLOWED_AD_ACCOUNT_ID = "736420925136885";  // dlleni ads one
+
+/** Datasets that exist in the business but must never receive our events. */
+const RETIRED_DATASETS: Record<string, string> = {
+  "2918655091623838": "dlleni p — web pixel, retired from this pipeline",
+  "23877785175175938": "DAMAC Riverside Pixel — dead, never received an event",
+  "624600273403733": "Damac Evenv — dead, never received an event",
+  "1359964318405226": "Dlleni - دلني Event Data — not used",
+};
+
+function assertAllowedDataset(datasetId: string): string {
+  if (datasetId === ALLOWED_DATASET_ID) return datasetId;
+  const reason = RETIRED_DATASETS[datasetId];
+  throw new Error(
+    `Refusing to send Conversions API events to dataset ${datasetId}` +
+      (reason ? ` (${reason})` : "") +
+      `. This deployment only writes to ${ALLOWED_DATASET_ID} (Dlleni CRM Events), ` +
+      `the dataset connected to ad account ${ALLOWED_AD_ACCOUNT_ID} (dlleni ads one). ` +
+      `Fix META_DATASET_ID in the environment.`
+  );
+}
+
+function assertAllowedAdAccount(): void {
+  const id = (process.env.META_AD_ACCOUNT_ID || "").replace(/^act_/, "");
+  if (id && id !== ALLOWED_AD_ACCOUNT_ID) {
+    throw new Error(
+      `Refusing to run against ad account ${id}. This deployment is locked to ` +
+        `${ALLOWED_AD_ACCOUNT_ID} (dlleni ads one). Fix META_AD_ACCOUNT_ID.`
+    );
+  }
+}
+
+export const metaConfig = () => {
+  assertAllowedAdAccount();
+  return {
+    token: requireEnv("META_ACCESS_TOKEN"),
+    pageId: requireEnv("META_PAGE_ID"),
+    datasetId: assertAllowedDataset(requireEnv("META_DATASET_ID")),
+    adAccountId: ALLOWED_AD_ACCOUNT_ID,
+    testEventCode: process.env.META_TEST_EVENT_CODE || undefined,
+  };
+};
 
 type GraphError = { error?: { message?: string; code?: number; error_subcode?: number; fbtrace_id?: string } };
 

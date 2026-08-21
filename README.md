@@ -36,7 +36,8 @@ Meta Lead Form ──► /api/sync ──► Supabase ──► Dashboard ──
 |---|---|
 | `META_ACCESS_TOKEN` | توكن System User (نفس اللي في MCP) |
 | `META_PAGE_ID` | `109652897854140` — Dlleni - دلني |
-| `META_DATASET_ID` | `2918655091623838` — بكسل «dlleni p» |
+| `META_DATASET_ID` | `1718089652564651` — **Dlleni CRM Events** (الوحيد المسموح) |
+| `META_AD_ACCOUNT_ID` | `736420925136885` — dlleni ads one (الوحيد المسموح) |
 | `SUPABASE_URL` | `https://yrmgwbufaaiaioqvabon.supabase.co` |
 | `SUPABASE_SERVICE_ROLE_KEY` | من Supabase → Settings → API |
 | `APP_PASSWORD` | الباسورد اللي الفريق هيدخل بيه |
@@ -106,7 +107,10 @@ Meta بتقول الـ **Conversion Leads** محتاج **200+ ليد/شهر**. �
 
 **٥. السحب مش بيمسح الفيدباك.** `ignoreDuplicates` — الليد الموجود مبيتلمسش، فحالة البروكر بتفضل زي ما هي.
 
+
 **٦. أرقام مصر.** `01xxxxxxxxx` و `+20` و `002` كلها بتترجم لـ `20xxxxxxxxxx` قبل الهَش — ده اللي بيرفع Event Match Quality.
+
+**٧. قُفل النطاق (Scope lock).** `lib/meta.ts` فيه قايمة بيضا من عنوان واحد بس: الداتاسِت **`1718089652564651` — Dlleni CRM Events**، وهي الوحيدة المربوطة بالحساب الإعلاني **`736420925136885` — dlleni ads one**. لو حد غيّر `META_DATASET_ID` لأي رقم تاني، التطبيق **بيرمي error فوراً** ومش بيبعت. السبب إن الداتاسِت الغلط بترجّع `200` و `events_received: 1` عادي جداً — الإشارة بس مبتوصلش للحساب. يعني الغلط ده كان هيفضل شكله نجاح لأسابيع.
 
 ---
 
