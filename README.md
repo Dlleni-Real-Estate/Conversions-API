@@ -170,9 +170,15 @@ The funnel screen only unlocks after Meta validates the feed — its guide ends 
 
 **1. Page token.** `/{page-id}/leadgen_forms` and `/{form-id}/leads` **reject** a System User token with `(#190) This method must be called with a Page Access Token`. `lib/meta.ts` exchanges for a Page token and caches it.
 
-**2. `lead_id` is not hashed.** It is Meta's own identifier — SHA-256 it and nothing matches. Only phone and email are hashed.
+**2. `lead_id` is not hashed, and it is a number.** It is Meta's own identifier — SHA-256 it and nothing matches. Only phone and email are hashed.
 
-**3. Dedup.** Every event carries `event_id = "{lead_id}:{event_name}"`, so replays and double-clicks cannot inflate the numbers.
+Meta types the field as **integer**, and a JSON *string* is accepted with no error and then matched against nothing: every event reads `Active` in Events Manager while the CRM report shows **Lead coverage 0%** and an empty funnel. Because a lead id is 15–17 digits it also passes JavaScript's safe-integer ceiling, so `Number()` would silently round the last digits off it (`39695357398433621` → `...624`). `lib/capi.ts` therefore carries the id as a string everywhere and un-quotes it in the serialised body.
+
+**Lead coverage must be at least 60%** for conversion-leads optimisation to run at all — Meta states this on the CRM diagnostic report in Events Manager. That is the percentage of its leads that received a matching event from us, which is why every lead gets `RawLead` whether or not anyone touched it.
+
+**3. Dedup.** Every event carries `event_id = "{lead_id}:{event_name}:{version}"`, so replays and double-clicks cannot inflate the numbers. The version is bumped only when a change makes already-sent events *wrong* rather than missing — Meta drops a repeat of an `event_id` it has seen, so a correction has to arrive under a new id or it is ignored.
+
+**3b. A skipped stage is a lost stage.** Meta counts a lead as having reached a stage only if we sent that stage's event. A broker who drags a lead straight from New to *Site visit done* would leave Meta believing it was never qualified — and `Qualified` is what the campaign optimises for. `/api/feedback` therefore sends every positive stage from 1 up to the one chosen, with ordered timestamps. Meta asks for this directly on the CRM card: *"For best results, send all existing events."*
 
 **4. No event is lost.** The event is written to `capi_events` **before** it is sent. If the network drops, the hourly cron retries it (6 attempts).
 

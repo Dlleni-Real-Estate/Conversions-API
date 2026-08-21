@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 import { isAuthed } from "@/lib/auth";
-import { STAGE_BY_STATUS, isStatus } from "@/lib/stages";
-import { sendLeadEvent } from "@/lib/capi";
+import { STAGES, STAGE_BY_STATUS, isStatus } from "@/lib/stages";
+import { sendLeadEvents } from "@/lib/capi";
 
 export const dynamic = "force-dynamic";
 
@@ -59,18 +59,48 @@ export async function POST(req: NextRequest) {
     author: body.owner ?? null,
   });
 
-  // "New" carries no signal — Meta already fired Lead on submit.
   if (!stage.event) {
     return NextResponse.json({ ok: true, lead, capi: { skipped: "no event for this status" } });
   }
 
-  const result = await sendLeadEvent({
-    leadId: lead.lead_id,
-    eventName: stage.event,
-    phone: lead.phone ?? undefined,
-    email: lead.email ?? undefined,
-    value: status === "reservation" ? (body.deal_value ?? lead.deal_value ?? null) : null,
-  });
+  // Meta counts a lead as having reached a stage only if we sent THAT stage's
+  // event. A broker who drags a lead straight from New to "Site visit done"
+  // would otherwise leave Meta believing the lead was never qualified — and
+  // Qualified is the stage the campaign optimises for. So a move to rank N
+  // sends every positive stage from 1 to N. Meta asks for exactly this on the
+  // CRM card in Events Manager: "For best results, send all existing events."
+  //
+  // Re-sending a stage the lead already passed is free: the event_id is
+  // deterministic, so Meta discards the repeat instead of counting it twice.
+  const chain =
+    stage.rank > 0
+      ? STAGES.filter((s) => s.rank >= 1 && s.rank <= stage.rank && s.event).sort((a, b) => a.rank - b.rank)
+      : [stage];
 
-  return NextResponse.json({ ok: true, lead, event: stage.event, capi: result });
+  // Ordered timestamps ending now, so the sequence Meta reads is the sequence
+  // the lead actually walked, and every one of them sits after the lead's
+  // creation time (Meta discards an event stamped before its lead existed).
+  const now = Date.now();
+  const result = await sendLeadEvents(
+    chain.map((st, i) => ({
+      leadId: lead.lead_id,
+      eventName: st.event as string,
+      eventTime: new Date(now - (chain.length - 1 - i) * 1000),
+      phone: lead.phone ?? undefined,
+      email: lead.email ?? undefined,
+      value: st.status === "reservation" ? (body.deal_value ?? lead.deal_value ?? null) : null,
+    }))
+  );
+
+  return NextResponse.json({
+    ok: true,
+    lead,
+    event: stage.event,
+    events: chain.map((st) => st.event),
+    capi: {
+      ok: result.failed === 0,
+      ...result,
+      error: result.failed > 0 ? `${result.failed}/${result.attempted} rejected` : undefined,
+    },
+  });
 }

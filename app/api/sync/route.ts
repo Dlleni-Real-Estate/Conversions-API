@@ -13,7 +13,7 @@ import {
 import { resolveCampaigns } from "@/lib/tracking";
 import { supabaseAdmin } from "@/lib/supabase";
 import { isAuthed } from "@/lib/auth";
-import { sendLeadEvents } from "@/lib/capi";
+import { capiEventId, sendLeadEvents } from "@/lib/capi";
 import { STAGE_BY_STATUS } from "@/lib/stages";
 
 export const dynamic = "force-dynamic";
@@ -320,14 +320,20 @@ async function sendMissingRawLeads(db: ReturnType<typeof supabaseAdmin>, limit =
 
   if (!recent || recent.length === 0) return 0;
 
+  // Matched on event_id, not on event_name: the id carries the payload version,
+  // so when a correction bumps that version this sweep sees the old rows as a
+  // different event and re-sends every lead once under the fixed payload.
   const { data: already } = await db
     .from("capi_events")
-    .select("lead_id")
+    .select("event_id")
     .eq("event_name", rawEvent)
+    .eq("status", "sent")
     .in("lead_id", recent.map((l: { lead_id: string }) => l.lead_id));
 
-  const done = new Set((already ?? []).map((r: { lead_id: string }) => r.lead_id));
-  const missing = recent.filter((l: { lead_id: string }) => !done.has(l.lead_id));
+  const done = new Set((already ?? []).map((r: { event_id: string }) => r.event_id));
+  const missing = recent.filter(
+    (l: { lead_id: string }) => !done.has(capiEventId(l.lead_id, rawEvent))
+  );
   if (missing.length === 0) return 0;
 
   const result = await sendLeadEvents(

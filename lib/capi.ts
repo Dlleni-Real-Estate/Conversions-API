@@ -9,8 +9,8 @@
  * CRM rather than a browser.
  *
  * Every event carries an `event_id` we generate deterministically
- * (lead_id + event_name) so replays and double-clicks dedupe instead of
- * inflating the numbers.
+ * (lead_id + event_name + EVENT_ID_VERSION) so replays and double-clicks dedupe
+ * instead of inflating the numbers.
  */
 
 import { createHash } from "crypto";
@@ -20,6 +20,34 @@ import { supabaseAdmin } from "./supabase";
 const GRAPH = `https://graph.facebook.com/${process.env.META_API_VERSION || "v23.0"}`;
 
 const sha256 = (v: string) => createHash("sha256").update(v.trim().toLowerCase()).digest("hex");
+
+/**
+ * Bumped when a change makes previously-sent events wrong rather than missing.
+ * Meta drops a repeat of an event_id it has already seen, so a correction has
+ * to arrive under a new id or it is silently ignored.
+ *
+ * 2 — `user_data.lead_id` was being sent as a JSON string. Meta types it as an
+ *     integer, and a string is accepted without complaint but matched against
+ *     nothing: the CRM report showed Lead coverage 0% and an empty funnel while
+ *     every event read "Active" in Events Manager.
+ */
+const EVENT_ID_VERSION = 2;
+
+/**
+ * Meta's spec for `user_data.lead_id` is **integer, do not hash** — and a lead
+ * id is 15–17 digits, which passes JavaScript's safe-integer ceiling at 17. So
+ * the id is carried as a string everywhere in this codebase and un-quoted here,
+ * in the serialised body, where no Number conversion can round the last digits
+ * off it. A lead id is always digits, so the pattern cannot match anything else.
+ */
+function serialize(body: Record<string, unknown>): string {
+  return JSON.stringify(body).replace(/"lead_id":"(\d+)"/g, '"lead_id":$1');
+}
+
+/** The dedup key Meta sees, and the key rows are stored under. */
+export function capiEventId(leadId: string, eventName: string): string {
+  return `${leadId}:${eventName}:${EVENT_ID_VERSION}`;
+}
 
 export type CapiInput = {
   leadId: string;
@@ -57,7 +85,7 @@ export function buildEvent(input: CapiInput) {
   return {
     event_name: input.eventName,
     event_time: Math.floor(t.getTime() / 1000),
-    event_id: `${input.leadId}:${input.eventName}`,
+    event_id: capiEventId(input.leadId, input.eventName),
     action_source: "system_generated",
     user_data,
     custom_data,
@@ -76,7 +104,7 @@ async function postEvents(events: unknown[]): Promise<SendResult> {
     const res = await fetch(`${GRAPH}/${datasetId}/events`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...body, access_token: token }),
+      body: serialize({ ...body, access_token: token }),
       signal: AbortSignal.timeout(30_000),
     });
     const json = await res.json().catch(() => ({}));
