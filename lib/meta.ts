@@ -331,3 +331,137 @@ export async function fetchAdLeads(adId: string, since?: number): Promise<RawLea
 
   return out;
 }
+
+// ── Delivery & spend ────────────────────────────────────────────────────────
+//
+// Lifetime insights at ad level for one campaign. This is what turns the
+// dashboard from "which creative brings nice-looking leads" into "which
+// creative brings a reservation for the least money".
+
+export type AdInsight = {
+  ad_id: string;
+  ad_name?: string;
+  adset_id?: string;
+  adset_name?: string;
+  campaign_id?: string;
+  campaign_name?: string;
+  spend: number;
+  impressions: number;
+  reach: number;
+  frequency: number;
+  clicks: number;
+  link_clicks: number;
+  ctr: number;
+  cpc: number;
+  cpm: number;
+  meta_leads: number;
+  cost_per_lead: number | null;
+  currency?: string;
+  date_start?: string;
+  date_stop?: string;
+};
+
+type InsightRow = {
+  ad_id?: string;
+  ad_name?: string;
+  adset_id?: string;
+  adset_name?: string;
+  campaign_id?: string;
+  campaign_name?: string;
+  spend?: string;
+  impressions?: string;
+  reach?: string;
+  frequency?: string;
+  clicks?: string;
+  inline_link_clicks?: string;
+  ctr?: string;
+  cpc?: string;
+  cpm?: string;
+  account_currency?: string;
+  date_start?: string;
+  date_stop?: string;
+  actions?: { action_type: string; value: string }[];
+  cost_per_action_type?: { action_type: string; value: string }[];
+};
+
+const num = (v: unknown): number => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+};
+
+/**
+ * Meta reports a lead-form submission under more than one action_type
+ * depending on placement and API version, and the same lead can appear under
+ * several of them. Take the largest rather than the sum, or the count doubles.
+ */
+const LEAD_ACTION_TYPES = ["onsite_conversion.lead_grouped", "leadgen.other", "lead", "offsite_conversion.fb_pixel_lead"];
+
+function leadCount(actions?: { action_type: string; value: string }[]): number {
+  if (!actions) return 0;
+  let best = 0;
+  for (const a of actions) {
+    if (LEAD_ACTION_TYPES.includes(a.action_type)) best = Math.max(best, num(a.value));
+  }
+  return best;
+}
+
+function costPerLead(rows?: { action_type: string; value: string }[]): number | null {
+  if (!rows) return null;
+  for (const t of LEAD_ACTION_TYPES) {
+    const hit = rows.find((r) => r.action_type === t);
+    if (hit) return num(hit.value);
+  }
+  return null;
+}
+
+export async function fetchCampaignAdInsights(campaignId: string): Promise<AdInsight[]> {
+  const { token } = metaConfig();
+  const out: AdInsight[] = [];
+  let after: string | undefined;
+
+  do {
+    const page: { data: InsightRow[]; paging?: { cursors?: { after?: string }; next?: string } } = await graph(
+      `/${campaignId}/insights`,
+      {
+        level: "ad",
+        date_preset: "maximum",
+        limit: "200",
+        fields:
+          "ad_id,ad_name,adset_id,adset_name,campaign_id,campaign_name,spend,impressions,reach," +
+          "frequency,clicks,inline_link_clicks,ctr,cpc,cpm,actions,cost_per_action_type,account_currency",
+        ...(after ? { after } : {}),
+      },
+      token
+    );
+
+    for (const r of page.data || []) {
+      if (!r.ad_id) continue;
+      out.push({
+        ad_id: r.ad_id,
+        ad_name: r.ad_name,
+        adset_id: r.adset_id,
+        adset_name: r.adset_name,
+        campaign_id: r.campaign_id,
+        campaign_name: r.campaign_name,
+        spend: num(r.spend),
+        impressions: num(r.impressions),
+        reach: num(r.reach),
+        frequency: num(r.frequency),
+        clicks: num(r.clicks),
+        link_clicks: num(r.inline_link_clicks),
+        ctr: num(r.ctr),
+        cpc: num(r.cpc),
+        cpm: num(r.cpm),
+        meta_leads: leadCount(r.actions),
+        cost_per_lead: costPerLead(r.cost_per_action_type),
+        currency: r.account_currency,
+        date_start: r.date_start,
+        date_stop: r.date_stop,
+      });
+    }
+
+    after = page.paging?.next ? page.paging?.cursors?.after : undefined;
+  } while (after);
+
+  return out;
+}

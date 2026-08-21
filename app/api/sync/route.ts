@@ -4,6 +4,7 @@ import {
   listCampaignAds,
   fetchAdLeads,
   listLeadForms,
+  fetchCampaignAdInsights,
   flattenFields,
   normalizeEgyptPhone,
 } from "@/lib/meta";
@@ -39,7 +40,15 @@ export async function GET(req: NextRequest) {
   let adsSeen = 0;
   let leadsFound = 0;
   let leadsNew = 0;
-  const perCampaign: { campaign: string; ads: number; found: number; inserted: number; error?: string }[] = [];
+  let insightsRows = 0;
+  const perCampaign: {
+    campaign: string;
+    ads: number;
+    found: number;
+    inserted: number;
+    spend?: number;
+    error?: string;
+  }[] = [];
 
   try {
     const { cutoff, states, tracked } = await resolveCampaigns(db, await listCampaigns());
@@ -114,7 +123,14 @@ export async function GET(req: NextRequest) {
         leadsFound += found;
 
         if (rows.length === 0) {
-          perCampaign.push({ campaign: campaign.name, ads: ads.length, found: 0, inserted: 0 });
+          const spend = await refreshInsights(db, campaign.id).then(
+            (r) => {
+              insightsRows += r.rows;
+              return r.spend;
+            },
+            () => undefined
+          );
+          perCampaign.push({ campaign: campaign.name, ads: ads.length, found: 0, inserted: 0, spend });
           continue;
         }
 
@@ -127,7 +143,19 @@ export async function GET(req: NextRequest) {
         if (error) throw new Error(error.message);
         const n = inserted?.length ?? 0;
         leadsNew += n;
-        perCampaign.push({ campaign: campaign.name, ads: ads.length, found, inserted: n });
+        perCampaign.push({
+          campaign: campaign.name,
+          ads: ads.length,
+          found,
+          inserted: n,
+          spend: await refreshInsights(db, campaign.id).then(
+            (r) => {
+              insightsRows += r.rows;
+              return r.spend;
+            },
+            () => undefined
+          ),
+        });
       } catch (err) {
         perCampaign.push({
           campaign: campaign.name,
@@ -160,6 +188,7 @@ export async function GET(req: NextRequest) {
       adsSeen,
       leadsFound,
       leadsNew,
+      insightsRows,
       perCampaign,
     });
   } catch (err) {
@@ -172,4 +201,28 @@ export async function GET(req: NextRequest) {
     }
     return NextResponse.json({ ok: false, error: message }, { status: 500 });
   }
+}
+
+/**
+ * Pull lifetime delivery + spend for every ad in the campaign and store it.
+ * Kept separate from the lead walk so a failure here degrades the money
+ * columns rather than losing leads: the caller catches and moves on.
+ */
+async function refreshInsights(
+  db: ReturnType<typeof supabaseAdmin>,
+  campaignId: string
+): Promise<{ rows: number; spend: number }> {
+  const insights = await fetchCampaignAdInsights(campaignId);
+  if (insights.length === 0) return { rows: 0, spend: 0 };
+
+  const { error } = await db.from("ad_insights").upsert(
+    insights.map((i) => ({ ...i, updated_at: new Date().toISOString() })),
+    { onConflict: "ad_id" }
+  );
+  if (error) throw new Error(error.message);
+
+  return {
+    rows: insights.length,
+    spend: Math.round(insights.reduce((sum, i) => sum + i.spend, 0) * 100) / 100,
+  };
 }

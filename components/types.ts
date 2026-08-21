@@ -1,0 +1,107 @@
+import type { Status } from "@/lib/stages";
+
+export type Lead = {
+  lead_id: string;
+  full_name: string | null;
+  phone: string | null;
+  email: string | null;
+  status: Status;
+  status_at: string | null;
+  notes: string | null;
+  owner: string | null;
+  deal_value: number | null;
+  submitted_at: string;
+  campaign_id: string | null;
+  campaign_name: string | null;
+  adset_name: string | null;
+  ad_id: string | null;
+  ad_name: string | null;
+  form_name: string | null;
+  platform: string | null;
+  raw_fields: Record<string, string> | null;
+  note_count?: number;
+  rank?: number;
+};
+
+export type AdRow = {
+  ad_id: string;
+  ad_name: string | null;
+  adset_name: string | null;
+  campaign_id: string | null;
+  campaign_name: string | null;
+  spend: number;
+  reach: number;
+  impressions: number;
+  frequency: number;
+  clicks: number;
+  link_clicks: number;
+  ctr: number;
+  cpc: number;
+  cpm: number;
+  meta_leads: number;
+  currency: string | null;
+  leads: number;
+  untouched: number;
+  worked: number;
+  no_answer: number;
+  qualified: number;
+  meetings_booked: number;
+  meetings_done: number;
+  site_visits_booked: number;
+  site_visits_done: number;
+  eoi: number;
+  reservations: number;
+  disqualified: number;
+  reservation_value: number;
+  qualified_pct: number | null;
+  disqualified_pct: number | null;
+  no_show_pct: number | null;
+  cost_per_lead: number | null;
+  cost_per_qualified: number | null;
+  cost_per_site_visit: number | null;
+  cost_per_reservation: number | null;
+};
+
+export type Analytics = {
+  ok: boolean;
+  currency: string;
+  scope: string | null;
+  campaigns: { id: string; name: string }[];
+  kpis: {
+    leads: number;
+    untouched: number;
+    spend: number;
+    reach: number;
+    impressions: number;
+    clicks: number;
+    ctr: number | null;
+    cost_per_lead: number | null;
+    qualified: number;
+    qualified_pct: number | null;
+    cost_per_qualified: number | null;
+    site_visits: number;
+    cost_per_site_visit: number | null;
+    reservations: number;
+    cost_per_reservation: number | null;
+    reservation_value: number;
+    roas: number | null;
+    median_response_hours: number | null;
+    contacted_within_hour_pct: number | null;
+  };
+  funnel: {
+    status: string;
+    label: string;
+    count: number;
+    accent: string;
+    fromPrev: number | null;
+    ofTotal: number | null;
+  }[];
+  byStatus: Record<Status, number>;
+  ads: AdRow[];
+  daily: { date: string; leads: number; qualified: number; reservations: number }[];
+  segments: {
+    field: string;
+    values: { value: string; leads: number; qualified: number; reservations: number; qualified_pct: number | null }[];
+  }[];
+  platforms: { platform: string; leads: number; qualified: number; qualified_pct: number | null }[];
+};

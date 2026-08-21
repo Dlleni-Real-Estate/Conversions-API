@@ -7,8 +7,8 @@ import { sendLeadEvent } from "@/lib/capi";
 export const dynamic = "force-dynamic";
 
 /**
- * The sales team sets a status → we store it → we tell Meta.
- * Body: { lead_id, status, notes?, owner?, deal_value? }
+ * The sales team moves a lead → we store it → we log it → we tell Meta.
+ * Body: { lead_id, status, note?, owner?, deal_value? }
  */
 export async function POST(req: NextRequest) {
   if (!isAuthed(req)) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
@@ -25,11 +25,17 @@ export async function POST(req: NextRequest) {
   const db = supabaseAdmin();
   const stage = STAGE_BY_STATUS[status];
 
+  // Read the old status first so the timeline entry can say where it came from.
+  const { data: before } = await db
+    .from("leads")
+    .select("status")
+    .eq("lead_id", body.lead_id)
+    .maybeSingle();
+
   const { data: lead, error } = await db
     .from("leads")
     .update({
       status,
-      notes: body.notes ?? undefined,
       owner: body.owner ?? undefined,
       deal_value: body.deal_value ?? undefined,
       status_at: new Date().toISOString(),
@@ -42,7 +48,18 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: error?.message || "lead not found" }, { status: 404 });
   }
 
-  // "new" carries no signal — Meta already fired Lead on submit.
+  // Every move is written into the same stream the notes live in, so a lead's
+  // history reads as one story instead of a status plus a mystery.
+  await db.from("lead_notes").insert({
+    lead_id: lead.lead_id,
+    kind: "stage",
+    from_status: before?.status ?? null,
+    to_status: status,
+    body: typeof body.note === "string" && body.note.trim() ? body.note.trim() : null,
+    author: body.owner ?? null,
+  });
+
+  // "New" carries no signal — Meta already fired Lead on submit.
   if (!stage.event) {
     return NextResponse.json({ ok: true, lead, capi: { skipped: "no event for this status" } });
   }
@@ -52,7 +69,7 @@ export async function POST(req: NextRequest) {
     eventName: stage.event,
     phone: lead.phone ?? undefined,
     email: lead.email ?? undefined,
-    value: status === "won" ? (body.deal_value ?? lead.deal_value ?? null) : null,
+    value: status === "reservation" ? (body.deal_value ?? lead.deal_value ?? null) : null,
   });
 
   return NextResponse.json({ ok: true, lead, event: stage.event, capi: result });
