@@ -1,30 +1,33 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isAuthed } from "@/lib/auth";
-import {
-  CRM_CONFIGURED, crmKeyFingerprint, crmTry, extractRows, findIdNamePairs, LOOKUP_CANDIDATES,
-} from "@/lib/crm";
+import { CRM_CONFIGURED, crmKeyFingerprint, crmSearchRaw, crmTry, extractRows, findIdNamePairs } from "@/lib/crm";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 /**
- * Round three, and the only question left: which number is which stage.
+ * Round four. One question left: which number is which stage.
  *
- * Rounds one and two settled everything else. The CRM carries Meta's own
- * leadgen_id and it matched ours on every lead that exists in both, so the join
- * is exact. Stage is `status_id` and no name appears anywhere on a lead record.
+ * Round three asked the integration-settings endpoint and got the integration's
+ * own form fields back, not the stage list, and the histogram came out useless
+ * because v4 ignored `page`/`per_page` and returned the same five rows six
+ * times (18 and 12 across "six pages" — both exact multiples of six).
  *
- * Guessing the ids from their order would be easy and wrong-shaped: the numbers
- * seen so far start at 69, and if 71 is "No Answer" rather than "cold calls"
- * then live leads get filed one stage off, and that error leaves here as
- * optimisation signal to Meta before any screen would show it. So this asks
- * twice, two independent ways, and only a matching answer is worth trusting:
+ * So this stops guessing at the envelope and reads it. Laravel names its
+ * paginator fields in the reply itself, so one look at the top-level keys
+ * settles what the request should have said. Three angles, and any one of them
+ * is enough:
  *
- *   NAMES  - the endpoint the CRM's own Stage Mappings screen loads from.
- *   SHAPE  - the real distribution of status_id across a sample of leads.
- *            The CRM's stage counts are wildly uneven (cold calls ~7,982,
- *            No Answer ~2,387, interested ~151, set a meeting ~6), so the
- *            shape of the histogram identifies the big stages on its own.
+ *   ENVELOPE   - what v4 calls its own paging fields.
+ *   PAGING     - twelve request shapes; the one that moves the first row id off
+ *                the default page is the real one. Row ids, not counts: a wrong
+ *                shape returns page one again, which counts the same as right.
+ *   SAVEDFILTER- the screen has a saved filter applied, and a saved stage
+ *                filter has to store stage ids. If it also carries labels, that
+ *                is the mapping outright.
+ *
+ * `?q=` stays as the fallback that cannot fail: search a name read off the CRM
+ * screen, read back its status_id, and the pair is settled by observation.
  */
 export async function GET(req: NextRequest) {
   if (!isAuthed(req)) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
@@ -32,50 +35,95 @@ export async function GET(req: NextRequest) {
 
   const out: Record<string, unknown> = { ok: true };
 
-  // ── NAMES ────────────────────────────────────────────────────────────────
-  const bodies: unknown[] = [{}, { slug: "meta_conversions" }, { integration: "meta_conversions" }, { key: "meta_conversions" }];
-  const named: unknown[] = [];
-  for (const path of LOOKUP_CANDIDATES) {
-    for (const body of bodies) {
-      try {
-        const r = await crmTry("POST", path, body);
-        if (r.status !== 200) continue;
-        const parsed = JSON.parse(r.text);
-        const pairs = findIdNamePairs(parsed);
-        // Only report a hit that actually looks like the stage list — the CRM's
-        // own screen shows these exact names.
-        const looksLikeStages = pairs.filter((p) =>
-          /fresh|cold call|no answer|interested|meeting|budget|available|network|expo|call back/i.test(p.name)
-        );
-        if (looksLikeStages.length) { named.push({ path, body, pairs: looksLikeStages }); break; }
-        if (pairs.length) named.push({ path, body, sample: pairs.slice(0, 20) });
-      } catch { /* wrong shape for this endpoint — try the next */ }
-    }
-    if (named.some((n) => (n as { pairs?: unknown[] }).pairs?.length)) break;
+  // ── q= : resolve a name straight to its status_id ────────────────────────
+  const q = req.nextUrl.searchParams.get("q");
+  if (q) {
+    const r = await crmSearchRaw(q, 10, "get-body");
+    const rows = extractRows(JSON.parse(r.text));
+    out.query = q;
+    out.matches = rows.map((row) => ({
+      full_name: row.full_name ?? null,
+      status_id: row.status_id ?? null,
+      leadgen_id: row.leadgen_id ?? null,
+      updated_at: row.updated_at ?? null,
+    }));
+    return NextResponse.json(out);
   }
-  out.names = named;
 
-  // ── SHAPE ────────────────────────────────────────────────────────────────
-  const tally = new Map<string, number>();
-  let scanned = 0;
-  for (let page = 1; page <= 6; page++) {
-    try {
-      const r = await crmTry("POST", "/api/v4/leads/leads", { page, per_page: 100 });
-      if (r.status !== 200) { out.v4Error = { page, httpStatus: r.status, preview: r.text.slice(0, 200) }; break; }
-      const rows = extractRows(JSON.parse(r.text));
-      if (!rows.length) break;
-      for (const row of rows) {
-        scanned++;
-        const k = String(row.status_id ?? "null");
-        tally.set(k, (tally.get(k) ?? 0) + 1);
-      }
-    } catch (err) { out.v4Error = { page, error: err instanceof Error ? err.message : String(err) }; break; }
+  // ── ENVELOPE ─────────────────────────────────────────────────────────────
+  try {
+    const r = await crmTry("POST", "/api/v4/leads/leads", {});
+    const parsed = JSON.parse(r.text) as Record<string, unknown>;
+    const data = parsed.data as Record<string, unknown> | undefined;
+    out.envelope = {
+      topKeys: Object.keys(parsed),
+      // Laravel hides {current_page,last_page,per_page,total} one level down.
+      dataKeys: data && !Array.isArray(data) ? Object.keys(data) : "(data is an array)",
+      meta: data && !Array.isArray(data)
+        ? Object.fromEntries(Object.entries(data).filter(([, v]) => typeof v === "number" || typeof v === "string"))
+        : null,
+    };
+  } catch (err) {
+    out.envelope = { error: err instanceof Error ? err.message : String(err) };
   }
-  out.statusHistogram = {
-    scanned,
-    counts: [...tally.entries()].sort((a, b) => b[1] - a[1])
-      .map(([status_id, n]) => ({ status_id, n, pct: Math.round((1000 * n) / Math.max(scanned, 1)) / 10 })),
-  };
+
+  // ── PAGING ───────────────────────────────────────────────────────────────
+  const shapes: { label: string; body: unknown }[] = [
+    { label: "page+per_page", body: { page: 2, per_page: 100 } },
+    { label: "page+limit", body: { page: 2, limit: 100 } },
+    { label: "page+size", body: { page: 2, size: 100 } },
+    { label: "page+perPage", body: { page: 2, perPage: 100 } },
+    { label: "limit+offset", body: { limit: 100, offset: 100 } },
+    { label: "start+length", body: { start: 100, length: 100 } },
+    { label: "nested pagination", body: { pagination: { page: 2, per_page: 100 } } },
+    { label: "take+skip", body: { take: 100, skip: 100 } },
+    { label: "page+rows", body: { page: 2, rows: 100 } },
+    { label: "paginate", body: { paginate: 100, page: 2 } },
+    { label: "page only", body: { page: 2 } },
+    { label: "per_page only", body: { per_page: 100 } },
+  ];
+  const paging: unknown[] = [];
+  let baselineFirstId: unknown = null;
+  try {
+    const base = extractRows(JSON.parse((await crmTry("POST", "/api/v4/leads/leads", {})).text));
+    baselineFirstId = base[0]?.id ?? null;
+    paging.push({ label: "(baseline, no params)", rowCount: base.length, firstId: baselineFirstId });
+  } catch { /* baseline unavailable; the shapes below still report counts */ }
+
+  for (const s of shapes) {
+    try {
+      const r = await crmTry("POST", "/api/v4/leads/leads", s.body);
+      const rows = extractRows(JSON.parse(r.text));
+      paging.push({
+        label: s.label,
+        rowCount: rows.length,
+        firstId: rows[0]?.id ?? null,
+        // The only signal that matters: did we actually leave page one?
+        moved: rows[0]?.id !== undefined && rows[0]?.id !== baselineFirstId,
+      });
+    } catch { paging.push({ label: s.label, error: "failed" }); }
+  }
+  // Query-string paging, in case the body is ignored entirely.
+  try {
+    const r = await crmTry("POST", "/api/v4/leads/leads?page=2&per_page=100", {});
+    const rows = extractRows(JSON.parse(r.text));
+    paging.push({ label: "querystring", rowCount: rows.length, firstId: rows[0]?.id ?? null, moved: rows[0]?.id !== baselineFirstId });
+  } catch { /* ignored */ }
+  out.paging = paging;
+
+  // ── SAVEDFILTER ──────────────────────────────────────────────────────────
+  const saved: unknown[] = [];
+  for (const body of [{ screen_slug: "leads" }, { slug: "leads" }, { screen: "leads" }, {}]) {
+    try {
+      const r = await crmTry("POST", "/api/v2/saved-filters/saved-filters/get-saved-filters-by-screen-slug", body);
+      if (r.status !== 200) continue;
+      const parsed = JSON.parse(r.text);
+      const pairs = findIdNamePairs(parsed);
+      saved.push({ body, pairs: pairs.slice(0, 40), preview: pairs.length ? null : r.text.slice(0, 400) });
+      if (pairs.length) break;
+    } catch { /* try the next body shape */ }
+  }
+  out.savedFilters = saved;
 
   return NextResponse.json(out);
 }
