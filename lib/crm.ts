@@ -212,6 +212,67 @@ export function pickStageLabel(row: Record<string, unknown>): string | null {
 
 const PHONE_KEYS = ["phone", "mobile", "phone_number", "mobile_number", "msisdn", "contact_number"];
 
+/** A person's name out of whatever object shape the CRM uses for people. */
+function personName(v: unknown): string | null {
+  if (typeof v === "string" && v.trim()) return v.trim();
+  if (!v || typeof v !== "object") return null;
+  const o = v as Record<string, unknown>;
+  for (const k of ["full_name", "name", "display_name", "username"]) {
+    const n = o[k];
+    if (typeof n === "string" && n.trim()) return n.trim();
+  }
+  const first = o.first_name, last = o.last_name;
+  if (typeof first === "string" && first.trim()) {
+    return [first, typeof last === "string" ? last : ""].join(" ").trim();
+  }
+  return null;
+}
+
+/**
+ * The agent currently holding the lead. v4 carries `assignees` (and the
+ * workspace shows exactly one name per row), so the first assignee is the
+ * holder. Joined with " + " on the rare multi-assignee row rather than
+ * silently dropping the second name.
+ */
+export function pickOwner(row: Record<string, unknown>): string | null {
+  const v = row.assignees ?? row.assignee ?? row.owner ?? null;
+  if (Array.isArray(v)) {
+    const names = v.map(personName).filter((n): n is string => Boolean(n));
+    return names.length ? names.join(" + ") : null;
+  }
+  return personName(v);
+}
+
+/**
+ * The most recent thing written on the lead — v4's `last_activity`. The full
+ * note history lives behind per-lead endpoints 8X does not document, so the
+ * sync mirrors the latest note each run; over successive runs that accumulates
+ * into a history on our side.
+ */
+export function pickLastNote(row: Record<string, unknown>): { body: string; author: string | null; at: string | null } | null {
+  const v = row.last_activity ?? row.lastActivity ?? null;
+  if (typeof v === "string" && v.trim()) return { body: v.trim(), author: null, at: null };
+  if (!v || typeof v !== "object") return null;
+  const o = v as Record<string, unknown>;
+  let body: string | null = null;
+  for (const k of ["description", "note", "body", "comment", "text", "title", "content"]) {
+    const b = o[k];
+    if (typeof b === "string" && b.trim()) { body = b.trim(); break; }
+  }
+  if (!body) return null;
+  let author: string | null = null;
+  for (const k of ["created_by_name", "user", "agent", "author", "created_by", "owner"]) {
+    const a = personName(o[k]);
+    if (a) { author = a; break; }
+  }
+  let at: string | null = null;
+  for (const k of ["created_at", "date", "at", "updated_at"]) {
+    const t = o[k];
+    if (typeof t === "string" && t.trim()) { at = t; break; }
+  }
+  return { body, author, at };
+}
+
 export function pickPhone(row: Record<string, unknown>): string | null {
   for (const k of PHONE_KEYS) {
     const v = row[k];

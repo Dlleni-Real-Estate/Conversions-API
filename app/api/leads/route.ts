@@ -45,8 +45,27 @@ export async function GET(req: NextRequest) {
   const ad = p.get("ad");
   if (ad && ad !== "all") q = q.eq("ad_id", ad);
 
-  const search = p.get("q");
-  if (search) q = q.or(`full_name.ilike.%${search}%,phone.ilike.%${search}%`);
+  // Search matches how people actually type. Phones are STORED normalised to
+  // "20xxxxxxxxxx" (lib/meta.ts normalizeEgyptPhone) but nobody types them
+  // that way — they type 010… or paste +20 10…. So the digits are stripped and
+  // searched in every variant that could be the stored form. Commas and parens
+  // are removed first because PostgREST's or() syntax treats them as its own
+  // grammar, and a search string containing one would otherwise 400.
+  const search = (p.get("q") || "").trim().replace(/[,()]/g, " ").slice(0, 60);
+  if (search) {
+    const ors = [
+      `full_name.ilike.%${search}%`,
+      `email.ilike.%${search}%`,
+      `owner.ilike.%${search}%`,
+      `ad_name.ilike.%${search}%`,
+    ];
+    const digits = search.replace(/\D/g, "");
+    if (digits.length >= 3) {
+      const variants = new Set([digits, digits.replace(/^0/, "20"), digits.replace(/^20/, "")]);
+      for (const v of variants) if (v.length >= 3) ors.push(`phone.ilike.%${v}%`);
+    }
+    q = q.or(ors.join(","));
+  }
 
   const { data, error, count } = await q;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });

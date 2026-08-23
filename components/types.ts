@@ -66,11 +66,32 @@ export type AdRow = {
   cost_per_reservation: number | null;
 };
 
+export type CampaignBoardRow = {
+  campaign_id: string;
+  campaign_name: string;
+  spend: number;
+  meta_leads: number;
+  leads: number;
+  untouched: number;
+  no_answer: number;
+  disqualified: number;
+  qualified: number;
+  qualified_pct: number | null;
+  reservations: number;
+  cost_per_lead: number | null;
+  cost_per_qualified: number | null;
+  currency: string | null;
+  date_start: string | null;
+  date_stop: string | null;
+};
+
 export type Analytics = {
   ok: boolean;
   currency: string;
   scope: string | null;
   campaigns: { id: string; name: string }[];
+  /** One row per campaign, same yardstick — present only when scope is "all". */
+  campaignBoard?: CampaignBoardRow[] | null;
   /** Straight from Meta — nothing here is derived from our lead table. */
   meta: {
     spend: number;

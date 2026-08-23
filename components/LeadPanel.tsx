@@ -108,6 +108,11 @@ export default function LeadPanel({
               <Badge className={stage.color}>{s(lead.status)}</Badge>
               <span className="text-xs text-slate-400">{t.stageFromCrm}</span>
             </div>
+            {lead.owner && (
+              <p dir="auto" className="mt-1.5 text-xs text-slate-600">
+                <span className="text-slate-400">{t.agent}:</span> <span className="font-medium">{lead.owner}</span>
+              </p>
+            )}
             {sHint(lead.status) && <p className="mt-2 text-xs text-slate-400">{sHint(lead.status)}</p>}
           </div>
 

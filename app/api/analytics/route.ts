@@ -247,6 +247,51 @@ export async function GET(req: NextRequest) {
     ([id, name]) => ({ id: id as string, name: name as string })
   );
 
+  // ── Campaigns side by side ───────────────────────────────────────────────
+  // Only when the whole account is in scope — inside one campaign the board
+  // would just repeat the headline numbers. Each row is one campaign measured
+  // with the same yardstick: Meta's own spend, our pipeline's outcomes.
+  // Campaigns appear whether they came from insights (spend but no leads yet)
+  // or from leads (leads but insights not refreshed yet) — a campaign missing
+  // from one source must not vanish from the board.
+  let campaignBoard: Record<string, unknown>[] | null = null;
+  if (!scoped) {
+    const ids = new Set<string>([
+      ...ci.map((r) => r.campaign_id),
+      ...leads.map((l) => l.campaign_id).filter((v): v is string => Boolean(v)),
+    ]);
+    campaignBoard = [...ids].map((id) => {
+      const insight = ci.find((r) => r.campaign_id === id) ?? null;
+      const mine = leads.filter((l) => l.campaign_id === id);
+      const reachedHere = (stage: Status) => {
+        const need = rankOf(stage);
+        return mine.filter((l) => rankOf(l.status) >= need && rankOf(l.status) > 0).length;
+      };
+      const spendHere = insight ? Number(insight.spend) : 0;
+      const q = reachedHere("qualified");
+      const resv = mine.filter((l) => l.status === "reservation").length;
+      return {
+        campaign_id: id,
+        campaign_name:
+          insight?.campaign_name ?? mine.find((l) => l.campaign_name)?.campaign_name ?? id,
+        spend: money(spendHere),
+        meta_leads: insight ? Number(insight.meta_leads) : 0,
+        leads: mine.length,
+        untouched: mine.filter((l) => l.status === "new").length,
+        no_answer: mine.filter((l) => l.status === "no_answer").length,
+        disqualified: mine.filter((l) => l.status === "disqualified").length,
+        qualified: q,
+        qualified_pct: pct(q, mine.length),
+        reservations: resv,
+        cost_per_lead: mine.length && spendHere ? money(spendHere / mine.length) : null,
+        cost_per_qualified: q && spendHere ? money(spendHere / q) : null,
+        currency: insight?.currency ?? currency,
+        date_start: insight?.date_start ?? null,
+        date_stop: insight?.date_stop ?? null,
+      };
+    }).sort((a, b) => Number(b.spend) - Number(a.spend) || Number(b.leads) - Number(a.leads));
+  }
+
   return NextResponse.json({
     ok: true,
     currency,
@@ -280,6 +325,7 @@ export async function GET(req: NextRequest) {
     },
     funnel,
     byStatus,
+    campaignBoard,
     ads,
     daily,
     segments,

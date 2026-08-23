@@ -32,7 +32,13 @@ const AD_COLUMNS: { key: SortKey; tk: keyof ReturnType<typeof useLang>["t"]; kin
   { core: true, key: "cost_per_reservation", tk: "tCostResv", kind: "money2" },
 ];
 
-export default function AnalyticsView({ data }: { data: Analytics }) {
+export default function AnalyticsView({
+  data,
+  onSelectCampaign,
+}: {
+  data: Analytics;
+  onSelectCampaign?: (id: string) => void;
+}) {
   const { t, s: stageName, locale } = useLang();
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "spend", dir: -1 });
   const [wide, setWide] = useState(false);
@@ -61,8 +67,74 @@ export default function AnalyticsView({ data }: { data: Analytics }) {
   );
   const totalStatus = statusRows.reduce((sum, st) => sum + st.count, 0);
 
+  const board = data.campaignBoard ?? [];
+
   return (
     <div className="space-y-6">
+      {/* ── Campaigns side by side ────────────────────────────────────────
+          Only rendered on the all-campaigns view — inside one campaign it
+          would just restate the headline. Row click narrows the whole page. */}
+      {board.length > 1 && (
+        <section>
+          <SectionTitle title={t.boardTitle} subtitle={t.boardSub} />
+          <Card className="overflow-x-auto">
+            <table className="w-full min-w-[760px] text-start text-sm">
+              <thead>
+                <tr className="border-b border-slate-200 text-xs text-slate-500">
+                  <Th>{t.tCampaign}</Th>
+                  <Th>{t.tSpend}</Th>
+                  <Th>{t.tMetaLeads}</Th>
+                  <Th>{t.tLeads}</Th>
+                  <Th>{t.tUntouched}</Th>
+                  <Th>{t.tNoAnswerCol}</Th>
+                  <Th>{t.tQual}</Th>
+                  <Th>{t.tQualPct}</Th>
+                  <Th>{t.tCostLead}</Th>
+                  <Th>{t.tCostQual}</Th>
+                  <Th>{t.tResv}</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {board.map((c) => (
+                  <tr
+                    key={c.campaign_id}
+                    onClick={() => onSelectCampaign?.(c.campaign_id)}
+                    className="cursor-pointer border-b border-slate-100 transition last:border-0 hover:bg-brand-50/40"
+                    title={c.campaign_name}
+                  >
+                    <Td>
+                      <div dir="auto" className="max-w-[16rem] truncate font-medium text-slate-800">
+                        {c.campaign_name}
+                      </div>
+                      <div className="text-[11px] text-slate-400">
+                        {c.date_start ? `${fmtDay(c.date_start, locale)} → ${c.date_stop ? fmtDay(c.date_stop, locale) : ""}` : ""}
+                      </div>
+                    </Td>
+                    <Td>{fmtMoney(c.spend, c.currency ?? currency)}</Td>
+                    <Td>{fmtInt(c.meta_leads)}</Td>
+                    <Td>{fmtInt(c.leads)}</Td>
+                    <Td>
+                      <span className={c.untouched > 0 ? "font-medium text-orange-600" : ""}>{fmtInt(c.untouched)}</span>
+                    </Td>
+                    <Td>{fmtInt(c.no_answer)}</Td>
+                    <Td>{fmtInt(c.qualified)}</Td>
+                    <Td>
+                      <span className={
+                        c.qualified_pct == null ? "" : c.qualified_pct >= 10 ? "font-semibold text-emerald-600" : c.qualified_pct < 3 ? "text-red-600" : ""
+                      }>
+                        {fmtPct(c.qualified_pct)}
+                      </span>
+                    </Td>
+                    <Td>{c.cost_per_lead == null ? "—" : fmtMoney2(c.cost_per_lead, c.currency ?? currency)}</Td>
+                    <Td>{c.cost_per_qualified == null ? "—" : fmtMoney2(c.cost_per_qualified, c.currency ?? currency)}</Td>
+                    <Td>{fmtInt(c.reservations)}</Td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Card>
+        </section>
+      )}
       {/* ── Meta's own numbers, verbatim ──────────────────────────────────
           Nothing in this block is computed from our lead table. Reach in
           particular is never added across campaigns: it counts people, and Meta

@@ -325,6 +325,11 @@ export default function LeadsView({
                         <div dir="auto" className="max-w-[14rem] truncate text-xs text-slate-400">
                           {lead.form_name || lead.campaign_name || ""}
                         </div>
+                        {lead.owner && (
+                          <div dir="auto" className="mt-0.5 max-w-[14rem] truncate text-[11px] font-medium text-brand-700">
+                            {t.agent}: {lead.owner}
+                          </div>
+                        )}
                       </Td>
 
                       <Td>

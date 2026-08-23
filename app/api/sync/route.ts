@@ -16,7 +16,7 @@ import { isAuthed } from "@/lib/auth";
 import { capiEventId, sendLeadEvents } from "@/lib/capi";
 import { STAGES, STAGE_BY_STATUS, type Status } from "@/lib/stages";
 import { APP_SENDS_EVENTS, SENDER } from "@/lib/sender";
-import { CRM_CONFIGURED, crmPage, statusFromCrmStatusId } from "@/lib/crm";
+import { CRM_CONFIGURED, crmPage, pickLastNote, pickOwner, statusFromCrmStatusId } from "@/lib/crm";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -48,7 +48,7 @@ export async function GET(req: NextRequest) {
   let leadsNew = 0;
   let insightsRows = 0;
   let stageEvents = 0;
-  let crm: CrmSyncResult = { skipped: "not configured", scanned: 0, matched: 0, changed: 0 };
+  let crm: CrmSyncResult = { skipped: "not configured", scanned: 0, matched: 0, changed: 0, owners: 0, notes: 0 };
   const perCampaign: {
     campaign: string;
     ads: number;
@@ -209,7 +209,7 @@ export async function GET(req: NextRequest) {
       `[sync] campaigns=${tracked.length}/${states.length} ads=${adsSeen} ` +
         `leads=${leadsFound} new=${leadsNew} stageEvents=${stageEvents} ` +
         `insights=${insightsRows} forms=${formsStored} ` +
-        `crm=${crm.skipped ?? `${crm.matched}/${crm.scanned} matched, ${crm.changed} changed`}`
+        `crm=${crm.skipped ?? `${crm.matched}/${crm.scanned} matched, ${crm.changed} moved, ${crm.owners} owners, ${crm.notes} notes`}`
     );
 
     return NextResponse.json({
@@ -432,67 +432,80 @@ type CrmSyncResult = {
   scanned: number;
   matched: number;
   changed: number;
+  owners: number;
+  notes: number;
   total?: number;
   coverage?: string;
   unmappedStatusIds?: string[];
   moves?: { lead_id: string; from: Status; to: Status }[];
+  /** First few mirrored rows, so a sync response shows what it actually read. */
+  sample?: { lead_id: string; owner: string | null; note: string | null }[];
 };
+
+const skippedResult = (why: string): CrmSyncResult =>
+  ({ skipped: why, scanned: 0, matched: 0, changed: 0, owners: 0, notes: 0 });
 
 /** How many CRM rows to pull at a time. 250 is the most the server honours. */
 const CRM_PAGE = 250;
 /** Leaves room for the rest of the run inside the 60s function limit. */
 const CRM_BUDGET_MS = 25_000;
+/** Note inserts per run — the mirror catches up over runs, never in one gulp. */
+const CRM_MAX_NOTES = 200;
 
 /**
- * Mirror the sales team's work back out of 8X CRM.
+ * Mirror the sales team's work back out of 8X CRM: the stage each lead is in,
+ * the agent holding it, and the latest note written on it.
  *
  * The team works in the CRM, so the CRM decides what happened to a lead and
  * this app's only job is to agree with it. Nothing here writes to the CRM.
  *
- * MATCHING. On `leadgen_id`, which the CRM stores verbatim from Meta and which
- * equals our `lead_id` exactly. Phone matching was the obvious alternative and
- * a bad one: +20 against 0020 against a leading zero, two family members behind
- * one number, and every mismatch looking identical to a lead that was never
- * passed on.
+ * MATCHING is on leadgen_id — stored verbatim from Meta, equal to our lead_id
+ * on every lead present in both. Phones are the fallback that is deliberately
+ * NOT taken: +20 against 0020, two relatives behind one number, and every
+ * mismatch indistinguishable from a lead that was never passed on.
  *
- * ORDER. The CRM returns newest first, and our leads are the recent ones, so a
- * run that only gets partway down the list has already covered the leads that
- * matter. The cursor exists so the tail is reached eventually, not so the head
- * has to wait for it.
+ * NOTES arrive through v4's `last_activity`, which only carries the most
+ * recent one — the full history sits behind endpoints 8X does not document.
+ * So each run copies the latest note it has not seen before, and the history
+ * accumulates here run by run. Dedup is by exact (lead, body): the same words
+ * written twice on one lead is rare; a lost note is invisible.
  *
- * UNMAPPED STAGES. A status_id with no name is counted and reported, never
- * guessed at. Guessing here would file a live lead under the wrong stage, and
- * that is a mistake that leaves this system as optimisation signal to Meta
- * before any screen would show it.
+ * An unmapped status_id is counted and named in the log, never guessed at — a
+ * lead filed under the wrong stage leaves here as optimisation signal to Meta,
+ * and no screen anywhere would show it.
  */
 async function syncCrmStatuses(db: ReturnType<typeof supabaseAdmin>): Promise<CrmSyncResult> {
   if (!CRM_CONFIGURED) {
     console.log("[sync] crm: skipped, CRM_API_KEY not set");
-    return { skipped: "CRM_API_KEY not set", scanned: 0, matched: 0, changed: 0 };
+    return skippedResult("CRM_API_KEY not set");
   }
 
-  // Two senders on one dataset means Meta trains on a funnel that is quietly
-  // double-counted, and no screen anywhere shows that. Worth a loud line.
+  // Two senders on one dataset means Meta trains on a double-counted funnel,
+  // and no screen anywhere reports that. Worth a loud line every run.
   if (APP_SENDS_EVENTS) {
     console.warn(
-      "[sync] crm: WARNING — 8X CRM is connected AND CAPI_SENDER=app. " +
-        "Both may be sending stage events to dataset " + process.env.META_DATASET_ID + ". " +
-        "Set CAPI_SENDER=crm once the CRM's Conversion Logs show events arriving."
+      "[sync] crm: reminder — CAPI_SENDER=app, so 8X's own Meta integration must stay OFF " +
+        "(Settings > Integrations > Meta Conversions API > Enable Integration)."
     );
   }
 
-  const { data: ours, error } = await db.from("leads").select("lead_id,status");
-  if (error) return { skipped: error.message, scanned: 0, matched: 0, changed: 0 };
+  const { data: ours, error } = await db.from("leads").select("lead_id,status,owner");
+  if (error) return skippedResult(error.message);
 
-  const mine = new Map((ours ?? []).map((l) => [String(l.lead_id), l.status as Status]));
+  const mine = new Map(
+    (ours ?? []).map((l) => [String(l.lead_id), { status: l.status as Status, owner: (l.owner as string | null) ?? null }])
+  );
   if (mine.size === 0) {
     console.log("[sync] crm: skipped, no leads stored yet");
-    return { skipped: "no leads stored yet", scanned: 0, matched: 0, changed: 0 };
+    return skippedResult("no leads stored yet");
   }
 
   const startedAt = Date.now();
   const unmapped = new Set<string>();
   const moves: { lead_id: string; from: Status; to: Status; at: string | null }[] = [];
+  const patches = new Map<string, Record<string, unknown>>();
+  const noteCandidates = new Map<string, { lead_id: string; body: string; author: string; at: string | null }>();
+  const sample: { lead_id: string; owner: string | null; note: string | null }[] = [];
   let scanned = 0;
   let matched = 0;
   let total = 0;
@@ -511,18 +524,32 @@ async function syncCrmStatuses(db: ReturnType<typeof supabaseAdmin>): Promise<Cr
         if (current === undefined) continue;      // not a lead this app tracks
         matched++;
 
-        const next = statusFromCrmStatusId(row.status_id);
-        if (!next) { unmapped.add(String(row.status_id)); continue; }
-        if (next === current) continue;
+        const patch: Record<string, unknown> = {};
 
-        moves.push({
-          lead_id: leadId,
-          from: current,
-          to: next,
-          // When the CRM last touched it — the honest timestamp for how long a
-          // lead sat before somebody worked it.
-          at: typeof row.updated_at === "string" ? row.updated_at : null,
-        });
+        const next = statusFromCrmStatusId(row.status_id);
+        if (!next && row.status_id != null) unmapped.add(String(row.status_id));
+        if (next && next !== current.status) {
+          const at = typeof row.updated_at === "string" ? row.updated_at : null;
+          moves.push({ lead_id: leadId, from: current.status, to: next, at });
+          patch.status = next;
+          patch.status_at = at ?? new Date().toISOString();
+        }
+
+        const owner = pickOwner(row);
+        if (owner && owner !== current.owner) patch.owner = owner;
+
+        const note = pickLastNote(row);
+        if (note && noteCandidates.size < CRM_MAX_NOTES) {
+          noteCandidates.set(`${leadId}\u0000${note.body}`, {
+            lead_id: leadId,
+            body: note.body,
+            author: note.author ?? owner ?? "8X CRM",
+            at: note.at,
+          });
+        }
+
+        if (Object.keys(patch).length > 0) patches.set(leadId, patch);
+        if (sample.length < 3) sample.push({ lead_id: leadId, owner, note: note ? note.body.slice(0, 60) : null });
       }
 
       if (scanned >= total) break;
@@ -532,11 +559,12 @@ async function syncCrmStatuses(db: ReturnType<typeof supabaseAdmin>): Promise<Cr
     console.error(`[sync] crm: page failed — ${err instanceof Error ? err.message : String(err)}`);
   }
 
-  for (const m of moves) {
-    await db.from("leads")
-      .update({ status: m.to, status_at: m.at ?? new Date().toISOString() })
-      .eq("lead_id", m.lead_id);
+  let owners = 0;
+  for (const [leadId, patch] of patches) {
+    const { error: upErr } = await db.from("leads").update(patch).eq("lead_id", leadId);
+    if (!upErr && "owner" in patch) owners++;
   }
+
   if (moves.length > 0) {
     // The timeline reads as one stream, so a stage that moved by itself is not
     // a mystery to whoever opens the lead later.
@@ -548,19 +576,50 @@ async function syncCrmStatuses(db: ReturnType<typeof supabaseAdmin>): Promise<Cr
     );
   }
 
+  // Insert only the notes we have not mirrored before.
+  let notesAdded = 0;
+  if (noteCandidates.size > 0) {
+    const ids = [...new Set([...noteCandidates.values()].map((n) => n.lead_id))];
+    const { data: existing } = await db
+      .from("lead_notes").select("lead_id,body").eq("kind", "note").in("lead_id", ids);
+    const seen = new Set((existing ?? []).map((n) => `${n.lead_id}\u0000${(n.body as string | null) ?? ""}`));
+    const fresh = [...noteCandidates.entries()]
+      .filter(([key]) => !seen.has(key))
+      .map(([, n]) => ({
+        lead_id: n.lead_id, kind: "note", body: n.body, author: n.author,
+        ...(n.at ? { created_at: n.at } : {}),
+      }));
+    if (fresh.length > 0) {
+      const { error: noteErr } = await db.from("lead_notes").insert(fresh);
+      if (noteErr) console.error(`[sync] crm: note insert failed — ${noteErr.message}`);
+      else notesAdded = fresh.length;
+    }
+  }
+
   if (unmapped.size > 0) {
     console.warn(`[sync] crm: ${unmapped.size} unknown status_id(s): ${[...unmapped].join(", ")} — add them to STATUS_ID_TO_STAGE`);
   }
   console.log(
-    `[sync] crm: scanned=${scanned}/${total} matched=${matched} changed=${moves.length}` +
+    `[sync] crm: scanned=${scanned}/${total} matched=${matched} moved=${moves.length} owners=${owners} notes=${notesAdded}` +
       (unmapped.size ? ` unmapped=${[...unmapped].join(",")}` : "")
   );
 
-  return {
+  const result: CrmSyncResult = {
     scanned, matched, total,
     changed: moves.length,
+    owners,
+    notes: notesAdded,
     coverage: total > 0 ? Math.round((1000 * scanned) / total) / 10 + "%" : undefined,
     unmappedStatusIds: unmapped.size ? [...unmapped] : undefined,
     moves: moves.slice(0, 25).map(({ lead_id, from, to }) => ({ lead_id, from, to })),
+    sample,
   };
+
+  // The health panel reads this back; a sync that never runs shows as absent.
+  await db.from("app_settings").upsert(
+    { key: "last_crm_sync", value: { at: new Date().toISOString(), ...result, moves: undefined, sample: undefined }, updated_at: new Date().toISOString() },
+    { onConflict: "key" }
+  );
+
+  return result;
 }

@@ -5,6 +5,7 @@ import LeadsView from "@/components/LeadsView";
 import LeadPanel from "@/components/LeadPanel";
 import AnalyticsView from "@/components/AnalyticsView";
 import CampaignSettings from "@/components/CampaignSettings";
+import HealthPanel from "@/components/HealthPanel";
 import { LangProvider, LangSwitch, useLang } from "@/components/LangProvider";
 import type { FormDictionary } from "@/lib/labels";
 import type { Analytics, Lead } from "@/components/types";
@@ -94,6 +95,17 @@ function Dashboard() {
     if (authed) load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authed, statusFilter, scope]);
+
+  // Search reloads on its own, debounced. It used to sit outside the effect's
+  // dependency list entirely, which is why typing in the box did nothing until
+  // some other control happened to change — the classic silent way for a
+  // search to be "broken" while every piece of it works.
+  useEffect(() => {
+    if (!authed) return;
+    const id = setTimeout(() => load(), 350);
+    return () => clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search]);
 
   /** Patch a lead in place so the table updates without a full reload. */
   const onChanged = useCallback((lead: Lead, patch: Partial<Lead>) => {
@@ -230,14 +242,19 @@ function Dashboard() {
 
         {tab === "analytics" &&
           (analytics ? (
-            <AnalyticsView data={analytics} />
+            <AnalyticsView data={analytics} onSelectCampaign={(id) => setScope(id)} />
           ) : (
             <div className="rounded-2xl border border-slate-200 bg-white px-5 py-14 text-center text-sm text-slate-400">
               {loading ? t.loading : t.noData}
             </div>
           ))}
 
-        {tab === "settings" && <CampaignSettings pw={pw} />}
+        {tab === "settings" && (
+          <div className="space-y-6">
+            <HealthPanel pw={pw} />
+            <CampaignSettings pw={pw} />
+          </div>
+        )}
         </div>
 
         {selected && (
