@@ -3,6 +3,7 @@ import { supabaseAdmin } from "@/lib/supabase";
 import { isAuthed } from "@/lib/auth";
 import { STAGES, STAGE_BY_STATUS, isStatus } from "@/lib/stages";
 import { sendLeadEvents } from "@/lib/capi";
+import { APP_SENDS_EVENTS, SENDER } from "@/lib/sender";
 
 export const dynamic = "force-dynamic";
 
@@ -12,6 +13,15 @@ export const dynamic = "force-dynamic";
  */
 export async function POST(req: NextRequest) {
   if (!isAuthed(req)) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+
+  // The dashboard is read-only, and when the CRM owns the Meta conversation
+  // this endpoint must refuse rather than quietly double-send.
+  if (!APP_SENDS_EVENTS) {
+    return NextResponse.json(
+      { error: `stages are set in 8X CRM (CAPI_SENDER=${SENDER})` },
+      { status: 409 }
+    );
+  }
 
   const body = await req.json().catch(() => null);
   if (!body?.lead_id || !body?.status) {

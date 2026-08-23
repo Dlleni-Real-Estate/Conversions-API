@@ -1,11 +1,10 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { STAGES, STAGE_BY_STATUS, type Status } from "@/lib/stages";
+import { STAGES, STAGE_BY_STATUS } from "@/lib/stages";
 import { answerLabel, questionLabel, type FormDictionary } from "@/lib/labels";
 import { Card, Empty, Td, Th, fmtAgo, fmtDate } from "./ui";
 import { useLang } from "./LangProvider";
-import NoteCell from "./NoteCell";
 import type { Lead } from "./types";
 
 /** Untouched for longer than this and the row starts asking to be noticed. */
@@ -25,6 +24,11 @@ const hoursSince = (iso: string) => (Date.now() - new Date(iso).getTime()) / 3_6
  * The default order is triage, not newest: a lead nobody has called yet and
  * that has been sitting for three hours matters more than one that arrived a
  * minute ago. Sorting by arrival time is what lets old leads quietly rot.
+ *
+ * Read-only by design. Stages and notes are the sales team's work, and the
+ * sales team works in 8X CRM — asking them to type the same thing twice is
+ * asking for it to be typed once, in the other place. What is shown here comes
+ * from the CRM and from Meta; nothing on this screen writes.
  */
 export default function LeadsView({
   leads,
@@ -35,8 +39,6 @@ export default function LeadsView({
   search,
   onSearch,
   onOpen,
-  onChanged,
-  pw,
   selectedId,
 }: {
   leads: Lead[];
@@ -47,13 +49,9 @@ export default function LeadsView({
   search: string;
   onSearch: (v: string) => void;
   onOpen: (lead: Lead) => void;
-  onChanged: (lead: Lead, patch: Partial<Lead>) => void;
-  pw: string;
   selectedId: string | null;
 }) {
   const { t, s, lang, locale } = useLang();
-  const [busyId, setBusyId] = useState<string | null>(null);
-  const [flash, setFlash] = useState<{ id: string; text: string } | null>(null);
   const [sort, setSort] = useState<Sort>("triage");
 
   const counts = useMemo(() => {
@@ -78,38 +76,6 @@ export default function LeadsView({
     });
   }, [leads, sort]);
 
-  async function move(lead: Lead, status: Status) {
-    if (status === lead.status) return;
-    setBusyId(lead.lead_id);
-    try {
-      const payload: Record<string, unknown> = { lead_id: lead.lead_id, status };
-      if (status === "reservation") {
-        const v = window.prompt(t.reservationPrompt);
-        if (v && Number(v)) payload.deal_value = Number(v);
-      }
-      const res = await fetch("/api/feedback", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-app-password": pw },
-        body: JSON.stringify(payload),
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Failed");
-
-      onChanged(lead, { status, deal_value: (payload.deal_value as number) ?? lead.deal_value });
-
-      const ev = STAGE_BY_STATUS[status].event;
-      setFlash({
-        id: lead.lead_id,
-        text: !ev ? t.saved : json.capi?.ok ? t.sentToMeta(ev) : t.metaRejected(json.capi?.error ?? "error"),
-      });
-      window.setTimeout(() => setFlash((f) => (f?.id === lead.lead_id ? null : f)), 4000);
-    } catch (e) {
-      setFlash({ id: lead.lead_id, text: e instanceof Error ? e.message : "Error" });
-    } finally {
-      setBusyId(null);
-    }
-  }
-
   /** The two answers worth seeing without opening anything. */
   const preview = (lead: Lead) =>
     Object.entries(lead.raw_fields || {})
@@ -119,25 +85,29 @@ export default function LeadsView({
 
   const isStale = (lead: Lead) => lead.status === "new" && hoursSince(lead.submitted_at) >= STALE_HOURS;
 
-  const StageSelect = ({ lead, className = "" }: { lead: Lead; className?: string }) => {
+  const StageBadge = ({ lead, className = "" }: { lead: Lead; className?: string }) => {
     const stage = STAGE_BY_STATUS[lead.status];
     return (
-      <select
-        value={lead.status}
-        disabled={busyId === lead.lead_id}
-        onClick={(e) => e.stopPropagation()}
-        onChange={(e) => move(lead, e.target.value as Status)}
-        className={`tap cursor-pointer rounded-lg border-2 px-2 py-1.5 text-xs font-semibold shadow-card outline-none ${stage.color} ${className}`}
-        style={{ borderColor: stage.accent }}
+      <span
+        title={t.stageFromCrm}
+        className={`inline-flex items-center rounded-lg border px-2.5 py-1 text-xs font-semibold ${stage.color} ${className}`}
       >
-        {STAGES.map((st) => (
-          <option key={st.status} value={st.status} className="bg-white font-normal text-slate-800">
-            {s(st.status)}
-          </option>
-        ))}
-      </select>
+        {s(lead.status)}
+      </span>
     );
   };
+
+  const Note = ({ lead }: { lead: Lead }) =>
+    lead.notes ? (
+      <div className="min-w-0">
+        <div dir="auto" className="line-clamp-2 text-xs text-slate-700">{lead.notes}</div>
+        {(lead.note_count ?? 0) > 1 && (
+          <div className="mt-0.5 text-[10px] text-slate-400">{t.notesCount(lead.note_count ?? 0)}</div>
+        )}
+      </div>
+    ) : (
+      <span className="text-xs text-slate-300">—</span>
+    );
 
   const Controls = (
     // Two side by side then a full-width search on a phone; one row on a laptop.
@@ -252,7 +222,7 @@ export default function LeadsView({
                     )}
 
                     <div className="mt-3 border-t border-slate-100 pt-3">
-                      <StageSelect lead={lead} className="w-full" />
+                      <StageBadge lead={lead} />
 
                       {lead.phone && (
                         <div className="mt-2 grid grid-cols-2 gap-2">
@@ -275,22 +245,12 @@ export default function LeadsView({
                         </div>
                       )}
 
-                      <div className="mt-2" onClick={(e) => e.stopPropagation()}>
-                        <NoteCell
-                          leadId={lead.lead_id}
-                          lastNote={lead.notes}
-                          count={lead.note_count ?? 0}
-                          pw={pw}
-                          onSaved={(body) =>
-                            onChanged(lead, { notes: body, note_count: (lead.note_count ?? 0) + 1 })
-                          }
-                        />
-                      </div>
+                      {lead.notes && (
+                        <div className="mt-2 rounded-lg bg-slate-50 px-2.5 py-2 ring-1 ring-slate-200">
+                          <Note lead={lead} />
+                        </div>
+                      )}
                     </div>
-
-                    {flash?.id === lead.lead_id && (
-                      <div className="mt-2 text-[11px] text-slate-500">{flash.text}</div>
-                    )}
                   </div>
                 </li>
               );
@@ -312,7 +272,6 @@ export default function LeadsView({
               <tbody className="divide-y divide-slate-200">
                 {ordered.map((lead) => {
                   const stage = STAGE_BY_STATUS[lead.status];
-                  const busy = busyId === lead.lead_id;
                   const stale = isStale(lead);
                   return (
                     <tr
@@ -321,7 +280,7 @@ export default function LeadsView({
                       title={t.openDetails}
                       className={`cursor-pointer transition even:bg-slate-50/70 hover:bg-brand-50 ${
                         selectedId === lead.lead_id ? "bg-brand-50" : ""
-                      } ${busy ? "opacity-60" : ""}`}
+                      }`}
                     >
                       <Td>
                         <div className="flex items-start gap-2.5">
@@ -376,24 +335,11 @@ export default function LeadsView({
                       </Td>
 
                       <Td>
-                        <StageSelect lead={lead} className="w-full max-w-[11rem]" />
-                        {flash?.id === lead.lead_id && (
-                          <div className="mt-1 max-w-[12rem] text-[11px] leading-tight text-slate-500">
-                            {flash.text}
-                          </div>
-                        )}
+                        <StageBadge lead={lead} />
                       </Td>
 
                       <Td>
-                        <NoteCell
-                          leadId={lead.lead_id}
-                          lastNote={lead.notes}
-                          count={lead.note_count ?? 0}
-                          pw={pw}
-                          onSaved={(body) =>
-                            onChanged(lead, { notes: body, note_count: (lead.note_count ?? 0) + 1 })
-                          }
-                        />
+                        <div className="max-w-[16rem]"><Note lead={lead} /></div>
                       </Td>
                     </tr>
                   );

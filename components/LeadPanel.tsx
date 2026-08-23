@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { STAGES, STAGE_BY_STATUS, type Status } from "@/lib/stages";
+import { STAGE_BY_STATUS, type Status } from "@/lib/stages";
 import { answerLabel, questionLabel, type FormDictionary } from "@/lib/labels";
 import { Badge, fmtAgo, fmtDate } from "./ui";
 import { useLang } from "./LangProvider";
@@ -21,25 +21,24 @@ type Note = {
  * Everything about one lead in one place: who they are, what they answered on
  * the form — in the exact words the form asked them — where they are in the
  * pipeline, and the full history of what the team did.
+ *
+ * Read-only. The stage and the notes are written in 8X CRM, which is where the
+ * sales team already works; this panel reports them rather than competing for
+ * them.
  */
 export default function LeadPanel({
   lead,
   dictionary,
   pw,
   onClose,
-  onChanged,
 }: {
   lead: Lead;
   dictionary: FormDictionary | null;
   pw: string;
   onClose: () => void;
-  onChanged: (lead: Lead, patch: Partial<Lead>) => void;
 }) {
   const { t, s, sHint, lang, locale } = useLang();
   const [notes, setNotes] = useState<Note[]>([]);
-  const [draft, setDraft] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
 
   const loadNotes = useCallback(async () => {
     const res = await fetch(`/api/notes?lead_id=${lead.lead_id}`, { headers: { "x-app-password": pw } });
@@ -49,8 +48,6 @@ export default function LeadPanel({
 
   useEffect(() => {
     setNotes([]);
-    setDraft("");
-    setMsg(null);
     loadNotes();
   }, [lead.lead_id, loadNotes]);
 
@@ -59,69 +56,6 @@ export default function LeadPanel({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
-
-  async function move(status: Status) {
-    if (status === lead.status) return;
-    setBusy(true);
-    setMsg(null);
-    try {
-      const stage = STAGE_BY_STATUS[status];
-      const payload: Record<string, unknown> = { lead_id: lead.lead_id, status };
-
-      if (status === "reservation") {
-        const v = window.prompt(t.reservationPrompt);
-        if (v && Number(v)) payload.deal_value = Number(v);
-      }
-      // A note typed but not yet saved rides along with the stage change, so
-      // the reason and the move land on the timeline together.
-      if (draft.trim()) payload.note = draft.trim();
-
-      const res = await fetch("/api/feedback", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-app-password": pw },
-        body: JSON.stringify(payload),
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Failed");
-
-      setDraft("");
-      onChanged(lead, { status, deal_value: (payload.deal_value as number) ?? lead.deal_value });
-      await loadNotes();
-
-      setMsg(
-        !stage.event
-          ? t.saved
-          : json.capi?.ok
-            ? t.sentToMeta(stage.event)
-            : t.metaRejected(json.capi?.error ?? "error")
-      );
-    } catch (e) {
-      setMsg(e instanceof Error ? e.message : "Error");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function addNote() {
-    const body = draft.trim();
-    if (!body) return;
-    setBusy(true);
-    try {
-      const res = await fetch("/api/notes", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-app-password": pw },
-        body: JSON.stringify({ lead_id: lead.lead_id, body }),
-      });
-      if (!res.ok) throw new Error((await res.json()).error || "Failed");
-      setDraft("");
-      onChanged(lead, { notes: body, note_count: (lead.note_count ?? 0) + 1 });
-      await loadNotes();
-    } catch (e) {
-      setMsg(e instanceof Error ? e.message : "Error");
-    } finally {
-      setBusy(false);
-    }
-  }
 
   const stage = STAGE_BY_STATUS[lead.status];
   const answers = Object.entries(lead.raw_fields || {});
@@ -145,16 +79,16 @@ export default function LeadPanel({
           </div>
 
           <div className="mt-3 flex flex-wrap items-center gap-2">
-            <Badge className={stage.color}>{s(lead.status)}</Badge>
             {lead.phone && (
               <>
                 <a
                   href={`https://wa.me/${lead.phone}`}
                   target="_blank"
                   rel="noreferrer"
-                  className="tap flex items-center rounded-lg border border-emerald-300 bg-emerald-50 px-3 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
+                  className="tap flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-emerald-50 px-3 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
                 >
-                  {t.whatsapp} <span dir="ltr">{lead.phone}</span>
+                  <span>{t.whatsapp}</span>
+                  <span dir="ltr" className="tabular-nums">+{lead.phone}</span>
                 </a>
                 <a
                   href={`tel:+${lead.phone}`}
@@ -169,45 +103,12 @@ export default function LeadPanel({
 
         <div className="space-y-6 px-6 py-5">
           <div>
-            <h3 className="text-[11px] font-medium uppercase tracking-wide text-slate-500">{t.moveTo}</h3>
-            <div className="mt-2 flex flex-wrap gap-1.5">
-              {STAGES.filter((st) => st.status !== "new").map((st) => (
-                <button
-                  key={st.status}
-                  disabled={busy || st.status === lead.status}
-                  onClick={() => move(st.status)}
-                  title={st.event ? t.sendsToMeta(st.event) : t.staysInternal}
-                  className={`tap rounded-lg border px-3 py-1.5 text-xs font-medium transition disabled:opacity-40 ${
-                    st.status === lead.status ? st.color : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-                  }`}
-                >
-                  {s(st.status)}
-                </button>
-              ))}
+            <h3 className="text-[11px] font-medium uppercase tracking-wide text-slate-500">{t.stage}</h3>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <Badge className={stage.color}>{s(lead.status)}</Badge>
+              <span className="text-xs text-slate-400">{t.stageFromCrm}</span>
             </div>
             {sHint(lead.status) && <p className="mt-2 text-xs text-slate-400">{sHint(lead.status)}</p>}
-            {msg && <p className="mt-2 text-xs text-slate-600">{msg}</p>}
-          </div>
-
-          <div>
-            <h3 className="text-[11px] font-medium uppercase tracking-wide text-slate-500">{t.addNoteTitle}</h3>
-            <textarea
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              rows={3}
-              placeholder={t.notePlaceholder}
-              className="mt-2 w-full resize-y rounded-xl border border-slate-300 px-3 py-2 text-base outline-none focus:border-brand-500 sm:text-sm"
-            />
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              <button
-                onClick={addNote}
-                disabled={busy || !draft.trim()}
-                className="tap rounded-lg bg-brand-600 px-4 text-xs font-semibold text-white hover:bg-brand-700 disabled:opacity-40"
-              >
-                {t.saveNote}
-              </button>
-              <span className="text-xs text-slate-400">{t.noteRidesAlong}</span>
-            </div>
           </div>
 
           {/* The form, in the words the customer actually read. Meta hands back

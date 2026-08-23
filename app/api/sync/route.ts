@@ -15,6 +15,7 @@ import { supabaseAdmin } from "@/lib/supabase";
 import { isAuthed } from "@/lib/auth";
 import { capiEventId, sendLeadEvents } from "@/lib/capi";
 import { STAGES, STAGE_BY_STATUS, type Status } from "@/lib/stages";
+import { APP_SENDS_EVENTS, SENDER } from "@/lib/sender";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -327,6 +328,12 @@ async function sendMissingStageEvents(
   limit = 200,
   maxEvents = 400
 ): Promise<number> {
+  // Someone else owns the conversation with Meta — say nothing.
+  if (!APP_SENDS_EVENTS) {
+    console.log(`[sync] stage sweep: skipped, CAPI_SENDER=${SENDER}`);
+    return 0;
+  }
+
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 3600_000).toISOString();
 
   const { data: recent, error: leadErr } = await db

@@ -17,7 +17,7 @@ export const DICT = {
   en: {
     dir: "ltr",
     appTitle: "Dlleni · Lead Pipeline",
-    appTagline: "Every stage you set here goes back to Meta, so the algorithm learns which ads bring buyers.",
+    appTagline: "Stages are set in 8X CRM and go back to Meta from there. This screen reports; it does not collect.",
     signIn: "Sign in",
     signInSub: "Sign in to continue",
     password: "Password",
@@ -69,6 +69,8 @@ export const DICT = {
 
     // Lead panel
     moveTo: "Move to",
+    stage: "Stage",
+    stageFromCrm: "set in 8X CRM",
     addNoteTitle: "Add a note",
     saveNote: "Save note",
     noteRidesAlong: "Or pick a stage above and this note is attached to the move.",
@@ -186,7 +188,7 @@ export const DICT = {
   ar: {
     dir: "rtl",
     appTitle: "دلني · لوحة الليدز",
-    appTagline: "كل مرحلة بتحددها هنا بترجع لميتا، عشان الخوارزمية تتعلّم أنهي إعلان بيجيب مشترين.",
+    appTagline: "المراحل بتتحدد في 8X CRM ومنه بتروح لميتا. الشاشة دي بتعرض، مش بتاخد إدخالات.",
     signIn: "دخول",
     signInSub: "ادخل الباسورد للدخول",
     password: "الباسورد",
@@ -236,6 +238,8 @@ export const DICT = {
     autosaveHint: "بيتحفظ لما تسيب المربع · ⌘+Enter",
 
     moveTo: "انقله لـ",
+    stage: "المرحلة",
+    stageFromCrm: "بتتحدد في 8X CRM",
     addNoteTitle: "أضف ملاحظة",
     saveNote: "احفظ الملاحظة",
     noteRidesAlong: "أو اختار مرحلة فوق والملاحظة هتتربط بالنقلة نفسها.",

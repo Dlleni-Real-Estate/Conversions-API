@@ -218,8 +218,6 @@ function Dashboard() {
           <LeadsView
             leads={leads}
             dictionary={dictionary}
-            pw={pw}
-            onChanged={onChanged}
             loading={loading}
             statusFilter={statusFilter}
             onStatusFilter={setStatusFilter}
@@ -248,7 +246,6 @@ function Dashboard() {
             dictionary={dictionary}
             pw={pw}
             onClose={() => setSelected(null)}
-            onChanged={onChanged}
           />
         )}
       </main>
