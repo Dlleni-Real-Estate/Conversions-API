@@ -151,11 +151,48 @@ export function pickIds(row: Record<string, unknown>): Record<string, unknown> {
 /**
  * status_id -> stage name, for this tenant.
  *
- * Left empty until the ids are read off real leads: an id mapped by guesswork
- * would quietly file live leads under the wrong stage, and that error would
- * reach Meta as optimisation signal before anyone noticed it on a screen.
+ * Every line below was confirmed by watching the CRM: take a lead whose
+ * status_id the API returned, search its name in the workspace, read the stage
+ * label off the row. Not one of them is inferred from ordering, and the reason
+ * for that discipline is visible in the numbers themselves.
+ *
+ * THE IDS ARE NOT SEQUENTIAL. They run 69-74 and then jump to 119-124, and the
+ * second block is not in the order the Stage Mappings screen lists it:
+ *
+ *      screen order            id
+ *      7  Red Expo             121   <- the one gap, see below
+ *      8  follow up after…     119
+ *      9  Call Back            123
+ *     10  low budget           120
+ *     11  Not Available        122
+ *     12  Network              124
+ *
+ * Reading them off in order would have put "follow up after meeting" at 121 —
+ * and that stage is the deepest POSITIVE one we send, the CompleteRegistration
+ * end of the funnel. Meta would have been told that leads who sat through a
+ * meeting were something else entirely, and no screen anywhere would have shown
+ * it, because a wrong stage name still looks like a working integration.
+ *
+ * 121 is the single exception and it is settled by elimination rather than
+ * sight: twelve stages, eleven seen, one name left over (Red Expo) and one id
+ * left over. It is also the safest possible one to be unsure about — Red Expo
+ * describes where a lead came from, carries no pipeline meaning, and is mapped
+ * to no Meta event.
  */
-export const STATUS_ID_TO_STAGE: Record<number, string> = {};
+export const STATUS_ID_TO_STAGE: Record<number, string> = {
+  69: "fresh leads",             // samer, Donia Magdi
+  70: "cold calls",              // Nagwa Elkady
+  71: "No Answer",               // Manaly farag, عادل حسن, Heba Z
+  72: "interested",              // Mohamed rezk  <- the optimisation target
+  73: "not interested",          // Alaa Ashraf
+  74: "set a meeting",           // Rabab Osama
+  119: "follow up after meeting",// Hazem Elbanna <- deepest positive stage
+  120: "low budget",             // Yara Lasheen
+  121: "Red Expo",               // by elimination; carries no pipeline meaning
+  122: "Not Available",          // Omaima Abdullah
+  123: "Call Back",              // Aly Obeid
+  124: "Network",                // Ahmed elsohiely
+};
 
 /** The stage label, wherever it hides — a string, or a nested {name}/{title}. */
 export function pickStageLabel(row: Record<string, unknown>): string | null {
