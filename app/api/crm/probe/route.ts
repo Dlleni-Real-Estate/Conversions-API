@@ -29,6 +29,38 @@ export async function GET(req: NextRequest) {
   if (!isAuthed(req)) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   if (!CRM_CONFIGURED) return NextResponse.json({ ok: false, key: crmKeyFingerprint() }, { status: 400 });
 
+  // Raw shapes of the two fields the mirror could not read. The sync's
+  // extractors returned null across the board, and null cannot say which of
+  // two very different things happened: the shape is not what the extractors
+  // expect, or the newest leads genuinely have no assignee and no activity
+  // yet (a fresh, untouched lead has neither). Only the raw JSON of rows that
+  // HAVE the fields can tell those apart.
+  if (req.nextUrl.searchParams.get("inspect")) {
+    const { rows } = await crmPage(0, 250);
+    const interesting = rows.filter((r) => {
+      const a = r.assignees, n = r.last_activity;
+      const hasA = Array.isArray(a) ? a.length > 0 : Boolean(a);
+      return hasA || Boolean(n);
+    });
+    const shape = (v: unknown) => JSON.stringify(v)?.slice(0, 600) ?? "undefined";
+    return NextResponse.json({
+      ok: true,
+      rowsRead: rows.length,
+      withEither: interesting.length,
+      samples: interesting.slice(0, 4).map((r) => ({
+        full_name: r.full_name ?? null,
+        status_id: r.status_id ?? null,
+        assignees_raw: shape(r.assignees),
+        assignees_ids_raw: shape(r.assignees_ids),
+        last_activity_raw: shape(r.last_activity),
+      })),
+      // One untouched row too, as the control case.
+      control: rows[0]
+        ? { full_name: rows[0].full_name ?? null, assignees_raw: shape(rows[0].assignees), last_activity_raw: shape(rows[0].last_activity) }
+        : null,
+    });
+  }
+
   // Fallback that cannot fail: a name off the screen straight to its status_id.
   const q = req.nextUrl.searchParams.get("q");
   if (q) {
