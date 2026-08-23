@@ -16,6 +16,7 @@ import { isAuthed } from "@/lib/auth";
 import { capiEventId, sendLeadEvents } from "@/lib/capi";
 import { STAGES, STAGE_BY_STATUS, type Status } from "@/lib/stages";
 import { APP_SENDS_EVENTS, SENDER } from "@/lib/sender";
+import { CRM_CONFIGURED, crmPage, statusFromCrmStatusId } from "@/lib/crm";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -47,6 +48,7 @@ export async function GET(req: NextRequest) {
   let leadsNew = 0;
   let insightsRows = 0;
   let stageEvents = 0;
+  let crm: CrmSyncResult = { skipped: "not configured", scanned: 0, matched: 0, changed: 0 };
   const perCampaign: {
     campaign: string;
     ads: number;
@@ -180,6 +182,10 @@ export async function GET(req: NextRequest) {
     // dashboard can show the Arabic question and answer instead of Meta's keys.
     const formsStored = await refreshFormSchemas(db, formIdsSeen);
 
+    // What the sales team actually did, read back out of 8X CRM. This is the
+    // only thing that fills `status`; nobody types stages into this app.
+    crm = await syncCrmStatuses(db);
+
     // Every stage each lead has reached, for any that never made it to Meta.
     stageEvents = await sendMissingStageEvents(db);
 
@@ -202,7 +208,8 @@ export async function GET(req: NextRequest) {
     console.log(
       `[sync] campaigns=${tracked.length}/${states.length} ads=${adsSeen} ` +
         `leads=${leadsFound} new=${leadsNew} stageEvents=${stageEvents} ` +
-        `insights=${insightsRows} forms=${formsStored}`
+        `insights=${insightsRows} forms=${formsStored} ` +
+        `crm=${crm.skipped ?? `${crm.matched}/${crm.scanned} matched, ${crm.changed} changed`}`
     );
 
     return NextResponse.json({
@@ -216,6 +223,7 @@ export async function GET(req: NextRequest) {
       insightsRows,
       stageEvents,
       formsStored,
+      crm,
       perCampaign,
     });
   } catch (err) {
@@ -412,4 +420,147 @@ async function sendMissingStageEvents(
     `[sync] stage events attempted=${result.attempted} sent=${result.sent} failed=${result.failed}`
   );
   return result.sent;
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 8X CRM -> this app
+// ─────────────────────────────────────────────────────────────────────────────
+
+type CrmSyncResult = {
+  skipped?: string;
+  scanned: number;
+  matched: number;
+  changed: number;
+  total?: number;
+  coverage?: string;
+  unmappedStatusIds?: string[];
+  moves?: { lead_id: string; from: Status; to: Status }[];
+};
+
+/** How many CRM rows to pull at a time. 250 is the most the server honours. */
+const CRM_PAGE = 250;
+/** Leaves room for the rest of the run inside the 60s function limit. */
+const CRM_BUDGET_MS = 25_000;
+
+/**
+ * Mirror the sales team's work back out of 8X CRM.
+ *
+ * The team works in the CRM, so the CRM decides what happened to a lead and
+ * this app's only job is to agree with it. Nothing here writes to the CRM.
+ *
+ * MATCHING. On `leadgen_id`, which the CRM stores verbatim from Meta and which
+ * equals our `lead_id` exactly. Phone matching was the obvious alternative and
+ * a bad one: +20 against 0020 against a leading zero, two family members behind
+ * one number, and every mismatch looking identical to a lead that was never
+ * passed on.
+ *
+ * ORDER. The CRM returns newest first, and our leads are the recent ones, so a
+ * run that only gets partway down the list has already covered the leads that
+ * matter. The cursor exists so the tail is reached eventually, not so the head
+ * has to wait for it.
+ *
+ * UNMAPPED STAGES. A status_id with no name is counted and reported, never
+ * guessed at. Guessing here would file a live lead under the wrong stage, and
+ * that is a mistake that leaves this system as optimisation signal to Meta
+ * before any screen would show it.
+ */
+async function syncCrmStatuses(db: ReturnType<typeof supabaseAdmin>): Promise<CrmSyncResult> {
+  if (!CRM_CONFIGURED) {
+    console.log("[sync] crm: skipped, CRM_API_KEY not set");
+    return { skipped: "CRM_API_KEY not set", scanned: 0, matched: 0, changed: 0 };
+  }
+
+  // Two senders on one dataset means Meta trains on a funnel that is quietly
+  // double-counted, and no screen anywhere shows that. Worth a loud line.
+  if (APP_SENDS_EVENTS) {
+    console.warn(
+      "[sync] crm: WARNING — 8X CRM is connected AND CAPI_SENDER=app. " +
+        "Both may be sending stage events to dataset " + process.env.META_DATASET_ID + ". " +
+        "Set CAPI_SENDER=crm once the CRM's Conversion Logs show events arriving."
+    );
+  }
+
+  const { data: ours, error } = await db.from("leads").select("lead_id,status");
+  if (error) return { skipped: error.message, scanned: 0, matched: 0, changed: 0 };
+
+  const mine = new Map((ours ?? []).map((l) => [String(l.lead_id), l.status as Status]));
+  if (mine.size === 0) {
+    console.log("[sync] crm: skipped, no leads stored yet");
+    return { skipped: "no leads stored yet", scanned: 0, matched: 0, changed: 0 };
+  }
+
+  const startedAt = Date.now();
+  const unmapped = new Set<string>();
+  const moves: { lead_id: string; from: Status; to: Status; at: string | null }[] = [];
+  let scanned = 0;
+  let matched = 0;
+  let total = 0;
+
+  try {
+    for (let start = 0; ; start += CRM_PAGE) {
+      const page = await crmPage(start, CRM_PAGE);
+      total = page.total;
+      if (page.rows.length === 0) break;
+      scanned += page.rows.length;
+
+      for (const row of page.rows) {
+        const leadId = row.leadgen_id ? String(row.leadgen_id) : null;
+        if (!leadId) continue;                    // not from Meta lead ads
+        const current = mine.get(leadId);
+        if (current === undefined) continue;      // not a lead this app tracks
+        matched++;
+
+        const next = statusFromCrmStatusId(row.status_id);
+        if (!next) { unmapped.add(String(row.status_id)); continue; }
+        if (next === current) continue;
+
+        moves.push({
+          lead_id: leadId,
+          from: current,
+          to: next,
+          // When the CRM last touched it — the honest timestamp for how long a
+          // lead sat before somebody worked it.
+          at: typeof row.updated_at === "string" ? row.updated_at : null,
+        });
+      }
+
+      if (scanned >= total) break;
+      if (Date.now() - startedAt > CRM_BUDGET_MS) break;
+    }
+  } catch (err) {
+    console.error(`[sync] crm: page failed — ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  for (const m of moves) {
+    await db.from("leads")
+      .update({ status: m.to, status_at: m.at ?? new Date().toISOString() })
+      .eq("lead_id", m.lead_id);
+  }
+  if (moves.length > 0) {
+    // The timeline reads as one stream, so a stage that moved by itself is not
+    // a mystery to whoever opens the lead later.
+    await db.from("lead_notes").insert(
+      moves.map((m) => ({
+        lead_id: m.lead_id, kind: "stage", from_status: m.from, to_status: m.to,
+        author: "8X CRM", body: null,
+      }))
+    );
+  }
+
+  if (unmapped.size > 0) {
+    console.warn(`[sync] crm: ${unmapped.size} unknown status_id(s): ${[...unmapped].join(", ")} — add them to STATUS_ID_TO_STAGE`);
+  }
+  console.log(
+    `[sync] crm: scanned=${scanned}/${total} matched=${matched} changed=${moves.length}` +
+      (unmapped.size ? ` unmapped=${[...unmapped].join(",")}` : "")
+  );
+
+  return {
+    scanned, matched, total,
+    changed: moves.length,
+    coverage: total > 0 ? Math.round((1000 * scanned) / total) / 10 + "%" : undefined,
+    unmappedStatusIds: unmapped.size ? [...unmapped] : undefined,
+    moves: moves.slice(0, 25).map(({ lead_id, from, to }) => ({ lead_id, from, to })),
+  };
 }
