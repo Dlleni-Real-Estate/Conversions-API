@@ -230,13 +230,36 @@ export function statusFromCrmStatusId(id: unknown): Status | null {
  * follow the shape its own frontend uses, /api/vN/{module}/{controller}.
  */
 export const LOOKUP_CANDIDATES = [
+  // The one the CRM itself calls to render the Stage Mappings screen. Watching
+  // that page load showed it fetch this once and then open the modal with no
+  // further request, so the stage list is already inside this response.
+  "/api/v1/integrations/settings/schema",
   "/api/v1/leads/statuses",
   "/api/v2/statuses/statuses",
   "/api/v2/lead-statuses/lead-statuses",
   "/api/v4/leads/statuses",
-  "/api/v2/leads/statuses",
-  "/api/v1/settings/statuses",
 ];
+
+/**
+ * Find every {id, name} pair anywhere in a JSON tree.
+ *
+ * The stage list is in there somewhere, but nothing documents the envelope and
+ * guessing a path would just fail silently on the next release. Walking for the
+ * shape instead of the location survives that.
+ */
+export function findIdNamePairs(node: unknown, depth = 0, out: { id: unknown; name: string; via: string }[] = [], via = "$"): { id: unknown; name: string; via: string }[] {
+  if (depth > 8 || out.length > 400 || !node || typeof node !== "object") return out;
+  if (Array.isArray(node)) {
+    node.forEach((v, i) => findIdNamePairs(v, depth + 1, out, `${via}[${i}]`));
+    return out;
+  }
+  const o = node as Record<string, unknown>;
+  const name = ["name", "title", "label", "stage", "status"].map((k) => o[k]).find((v) => typeof v === "string" && v.trim());
+  const id = ["id", "status_id", "value", "key"].map((k) => o[k]).find((v) => typeof v === "number" || typeof v === "string");
+  if (name !== undefined && id !== undefined) out.push({ id, name: String(name), via });
+  for (const [k, v] of Object.entries(o)) findIdNamePairs(v, depth + 1, out, `${via}.${k}`);
+  return out;
+}
 
 /** Try any path with the API key. Used by the probe only. */
 export async function crmTry(method: "GET" | "POST", path: string, body?: unknown) {
