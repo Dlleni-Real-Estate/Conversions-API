@@ -8,3 +8,6 @@ next-env.d.ts
 
 # scratch: git lock files this environment cannot delete
 _to_delete/
+
+.commitmsg.txt
+_to_delete/

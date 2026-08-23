@@ -129,6 +129,34 @@ const STAGE_KEYS = [
   "current_status", "current_stage", "lead_stage", "state",
 ];
 
+/**
+ * 8X returns the stage as `status_id` — a numeric foreign key, not a name. The
+ * probe proved it: every other field came back and `stageLabel` was null.
+ * These are the id fields worth reading off a row; none of them is personal
+ * data, so they are safe to log and to return from the probe.
+ */
+export const ID_FIELDS = [
+  "id", "status_id", "old_status_id", "leadgen_id", "form_id", "page_id",
+  "ad_id", "adgroup_id", "campaign_id", "source_id", "lead_quality_id",
+  "lead_classification_id", "rating_id", "generation_source", "is_cold_calls",
+  "created_at", "updated_at",
+];
+
+export function pickIds(row: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const k of ID_FIELDS) if (k in row) out[k] = row[k];
+  return out;
+}
+
+/**
+ * status_id -> stage name, for this tenant.
+ *
+ * Left empty until the ids are read off real leads: an id mapped by guesswork
+ * would quietly file live leads under the wrong stage, and that error would
+ * reach Meta as optimisation signal before anyone noticed it on a screen.
+ */
+export const STATUS_ID_TO_STAGE: Record<number, string> = {};
+
 /** The stage label, wherever it hides — a string, or a nested {name}/{title}. */
 export function pickStageLabel(row: Record<string, unknown>): string | null {
   for (const k of STAGE_KEYS) {
@@ -189,3 +217,31 @@ export function statusFromCrmStage(label: string | null): Status | null {
   if (!label) return null;
   return CRM_STAGE_TO_STATUS[normalise(label)] ?? null;
 }
+
+/** Resolve the numeric stage id, once STATUS_ID_TO_STAGE is filled in. */
+export function statusFromCrmStatusId(id: unknown): Status | null {
+  const n = typeof id === "number" ? id : typeof id === "string" ? Number(id) : NaN;
+  if (!Number.isFinite(n)) return null;
+  return statusFromCrmStage(STATUS_ID_TO_STAGE[n] ?? null);
+}
+
+/**
+ * Endpoints that might list the stages by id. 8X documents none of them; these
+ * follow the shape its own frontend uses, /api/vN/{module}/{controller}.
+ */
+export const LOOKUP_CANDIDATES = [
+  "/api/v1/leads/statuses",
+  "/api/v2/statuses/statuses",
+  "/api/v2/lead-statuses/lead-statuses",
+  "/api/v4/leads/statuses",
+  "/api/v2/leads/statuses",
+  "/api/v1/settings/statuses",
+];
+
+/** Try any path with the API key. Used by the probe only. */
+export async function crmTry(method: "GET" | "POST", path: string, body?: unknown) {
+  const payload = body === undefined ? null : JSON.stringify(body);
+  return rawExported(method, path, payload);
+}
+
+export const rawExported = raw;
