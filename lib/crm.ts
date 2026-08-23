@@ -268,3 +268,20 @@ export async function crmTry(method: "GET" | "POST", path: string, body?: unknow
 }
 
 export const rawExported = raw;
+
+/**
+ * v4 is a DataTables endpoint, not a Laravel paginator: it replies
+ * {draw, recordsTotal, recordsFiltered, data} and it pages on `start`/`length`.
+ * Eleven other request shapes were ignored in silence — they each returned
+ * page one, which counts identically to a page that worked, so the giveaway
+ * was the first row id staying put rather than the row count.
+ */
+export async function crmPage(start: number, length: number) {
+  const r = await rawExported("POST", "/api/v4/leads/leads", JSON.stringify({ start, length }));
+  if (r.status !== 200) throw new Error(`v4 HTTP ${r.status}`);
+  const parsed = JSON.parse(r.text) as { data?: { recordsTotal?: number; data?: unknown[] } };
+  return {
+    total: parsed.data?.recordsTotal ?? 0,
+    rows: (parsed.data?.data ?? []) as Record<string, unknown>[],
+  };
+}
