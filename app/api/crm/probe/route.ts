@@ -41,9 +41,21 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  const pageSize = Number(req.nextUrl.searchParams.get("size") ?? 2000);
-  const budgetMs = 45_000;
+  // length=100 paged correctly; length=2000 returned 35 rows and then nothing,
+  // so the server caps the page and does not say by how much. Find the ceiling
+  // by asking, rather than picking a number and hoping.
   const startedAt = Date.now();
+  const budgetMs = 42_000;
+  const probes: { length: number; got: number }[] = [];
+  let pageSize = 100;
+  for (const len of [100, 250, 500, 1000]) {
+    try {
+      const { rows } = await crmPage(0, len);
+      probes.push({ length: len, got: rows.length });
+      // Only trust a length the server actually honoured in full.
+      if (rows.length >= len) pageSize = len; else break;
+    } catch { break; }
+  }
 
   const counts = new Map<string, number>();
   const examples = new Map<string, string[]>();
@@ -57,7 +69,7 @@ export async function GET(req: NextRequest) {
     for (let start = 0; ; start += pageSize) {
       const { total: t, rows } = await crmPage(start, pageSize);
       total = t;
-      if (!rows.length) { complete = true; break; }
+      if (!rows.length) break;
 
       for (const row of rows) {
         scanned++;
@@ -71,7 +83,7 @@ export async function GET(req: NextRequest) {
         }
       }
 
-      if (scanned >= total) { complete = true; break; }
+      if (scanned >= total) break;
       // Stop before the function is killed, and say so, rather than returning a
       // partial tally that reads exactly like a finished one.
       if (Date.now() - startedAt > budgetMs) break;
@@ -80,11 +92,21 @@ export async function GET(req: NextRequest) {
     error = err instanceof Error ? err.message : String(err);
   }
 
+  // The previous round set this the moment a page came back empty, so a run
+  // that saw 35 of 13,687 leads reported complete:true — the exact thing the
+  // flag existed to prevent. Completeness is one question and one only: did we
+  // account for every record the server says exists.
+  complete = total > 0 && scanned >= total;
+
   return NextResponse.json({
     ok: true,
     total,
     scanned,
     complete,
+    coverage: total > 0 ? Math.round((1000 * scanned) / total) / 10 + "%" : null,
+    pageSize,
+    pageSizeProbes: probes,
+    elapsedMs: Date.now() - startedAt,
     error,
     stages: [...counts.entries()]
       .sort((a, b) => b[1] - a[1])
