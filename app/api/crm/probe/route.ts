@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isAuthed } from "@/lib/auth";
-import { CRM_CONFIGURED, crmKeyFingerprint, crmPage, crmSearchRaw, extractRows } from "@/lib/crm";
+import { CRM_CONFIGURED, crmKeyFingerprint, crmPage, crmSearchRaw, crmTry, extractRows, findIdNamePairs } from "@/lib/crm";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -28,6 +28,81 @@ export const maxDuration = 60;
 export async function GET(req: NextRequest) {
   if (!isAuthed(req)) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   if (!CRM_CONFIGURED) return NextResponse.json({ ok: false, key: crmKeyFingerprint() }, { status: 400 });
+
+  // Who is agent #8? The assignee arrives as a bare user id with no name, yet
+  // the CRM's own Assignees filter lists every agent by name without firing a
+  // single extra request — so the names sit either behind an expansion the v4
+  // endpoint accepts, or behind a users endpoint the SPA caches at boot. Both
+  // are asked here, and the answer decides how the mirror resolves names.
+  if (req.nextUrl.searchParams.get("users")) {
+    const out: Record<string, unknown> = { ok: true };
+
+    // 1. Does v4 expand relations when asked in the request body?
+    const expansions: Record<string, unknown>[] = [
+      { start: 0, length: 2, with: ["assignees", "last_activity"] },
+      { start: 0, length: 2, includes: ["assignees", "last_activity"] },
+      { start: 0, length: 2, expand: ["assignees", "last_activity"] },
+      { start: 0, length: 2, relations: ["assignees", "last_activity"] },
+      { start: 0, length: 2, with_relations: true },
+    ];
+    const expTries: unknown[] = [];
+    for (const body of expansions) {
+      try {
+        const r = await crmTry("POST", "/api/v4/leads/leads", body);
+        const rows = r.status === 200 ? extractRows(JSON.parse(r.text)) : [];
+        expTries.push({
+          body: Object.keys(body).filter((k) => k !== "start" && k !== "length"),
+          assignees_raw: rows[0] ? JSON.stringify(rows[0].assignees)?.slice(0, 300) : null,
+        });
+      } catch { /* next */ }
+    }
+    out.expansions = expTries;
+
+    // 2. Is there a users/employees endpoint the key can reach?
+    const KNOWN = /sabry|moustafa|shawki|zakaria|roshdy|rosh/i;
+    const candidates = [
+      "/api/v2/users/users", "/api/v1/users/users", "/api/v4/users/users",
+      "/api/v2/users/get-users", "/api/v2/employees/employees",
+      "/api/v2/hr/employees/employees", "/api/v1/employees/employees",
+      "/api/v2/settings/users", "/api/v2/lookups/users", "/api/v2/agents/agents",
+    ];
+    const hits: unknown[] = [];
+    for (const path of candidates) {
+      for (const body of [{}, { start: 0, length: 100 }]) {
+        try {
+          const r = await crmTry("POST", path, body);
+          if (r.status === 404 || r.status === 405) break;
+          if (r.status !== 200) { hits.push({ path, httpStatus: r.status }); break; }
+          const pairs = findIdNamePairs(JSON.parse(r.text));
+          const known = pairs.filter((pr: { name: string }) => KNOWN.test(pr.name));
+          hits.push({ path, pairs: known.length ? known : pairs.slice(0, 10), confirmed: known.length > 0 });
+          break;
+        } catch { /* next body */ }
+      }
+      if (hits.some((h) => (h as { confirmed?: boolean }).confirmed)) break;
+    }
+    out.userEndpoints = hits;
+
+    // 3. Hunt for rows that actually HAVE last_activity, however deep they sit.
+    const found: unknown[] = [];
+    const t0 = Date.now();
+    for (let start = 0; start < 3000 && found.length < 3 && Date.now() - t0 < 30_000; start += 250) {
+      const { rows } = await crmPage(start, 250);
+      if (!rows.length) break;
+      for (const row of rows) {
+        if (row.last_activity && found.length < 3) {
+          found.push({
+            full_name: row.full_name ?? null,
+            status_id: row.status_id ?? null,
+            last_activity_raw: JSON.stringify(row.last_activity)?.slice(0, 600),
+          });
+        }
+      }
+    }
+    out.lastActivitySamples = found;
+
+    return NextResponse.json(out);
+  }
 
   // Raw shapes of the two fields the mirror could not read. The sync's
   // extractors returned null across the board, and null cannot say which of
