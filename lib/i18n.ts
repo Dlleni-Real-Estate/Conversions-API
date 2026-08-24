@@ -63,6 +63,8 @@ export const DICT = {
     accOtherBizHelp:
       "The main token only sees its own Business. For an ad account that lives in a different Meta Business, paste a token generated THERE (Business Settings \u2192 System users \u2192 generate token with ads_read, pages_show_list, pages_manage_ads, leads_retrieval \u2014 and assign the ad account, its Page and its dataset to that user). The token is stored with the connection, used only for this account's calls, and never shown again; disconnecting the account forgets it.",
     accTokenPh: "Access token from the other Business",
+    accManualShow: "Advanced: connect with a manually generated token (never expires)",
+    accManualHide: "Hide the manual-token path",
     accProbe: "Check token",
     accProbing: "Checking\u2026",
     accProbeNone: "This token sees no connectable ad account. Assign the ad account (and its dataset) to the token's system user in that Business, then check again.",
@@ -303,6 +305,8 @@ export const DICT = {
     accOtherBizHelp:
       "التوكن الرئيسي بيشوف الـBusiness بتاعه بس. عشان حساب إعلانات في Meta Business تاني، حط هنا توكن متولّد هناك (Business Settings \u2190 System users \u2190 توكن بصلاحيات ads_read و pages_show_list و pages_manage_ads و leads_retrieval \u2014 ومتعيّن له حساب الإعلانات وصفحته والداتاسِت). التوكن بيتخزن مع الربط، بيستخدم لمكالمات الحساب ده بس، ومش بيظهر تاني \u2014 ولو فصلت الحساب بيتنسي معاه.",
     accTokenPh: "توكن الـBusiness التاني",
+    accManualShow: "متقدم: الربط بتوكن يدوي (مبيخلصش أبداً)",
+    accManualHide: "اخفي طريقة التوكن اليدوي",
     accProbe: "افحص التوكن",
     accProbing: "بيفحص\u2026",
     accProbeNone: "التوكن ده مش شايف أي حساب إعلانات ينفع يتربط. عيّن حساب الإعلانات (والداتاسِت بتاعه) للـsystem user بتاع التوكن في الـBusiness ده، وافحص تاني.",

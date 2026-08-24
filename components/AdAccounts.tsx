@@ -61,6 +61,10 @@ export default function AdAccounts({ pw }: { pw: string }) {
   const [probing, setProbing] = useState(false);
   const [probe, setProbe] = useState<Probe | null>(null);
   const [probeErr, setProbeErr] = useState<string | null>(null);
+  // The manual-token path is the fallback, not the flow. Folded away so the
+  // section reads as one action - the blue button - instead of two competing
+  // ones; "Check token" only ever belonged to the paste-a-token path.
+  const [manualOpen, setManualOpen] = useState(false);
   // How the current probe authenticated - a Facebook Login nonce or a pasted
   // token. Connect must use the SAME credential that listed the account.
   const [probeAuth, setProbeAuth] = useState<
@@ -463,26 +467,35 @@ export default function AdAccounts({ pw }: { pw: string }) {
           {t.accFbLogin}
         </button>
 
-        <p className="mt-4 text-[11px] font-medium text-slate-400">{t.accOrManual}</p>
-        <p className="mt-1 max-w-2xl text-[11px] leading-relaxed text-slate-500">{t.accOtherBizHelp}</p>
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <input
-            type="password"
-            dir="ltr"
-            value={probeToken}
-            onChange={(e) => setProbeToken(e.target.value)}
-            placeholder={t.accTokenPh}
-            autoComplete="off"
-            className="tap w-80 max-w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs shadow-card"
-          />
-          <button
-            onClick={runProbe}
-            disabled={!probeToken.trim() || probing}
-            className="tap rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-medium text-white shadow-card hover:bg-brand-700 disabled:opacity-40"
-          >
-            {probing ? t.accProbing : t.accProbe}
-          </button>
-        </div>
+        <button
+          onClick={() => setManualOpen((v) => !v)}
+          className="tap mt-4 block text-[11px] font-medium text-slate-400 underline decoration-dotted underline-offset-2 hover:text-slate-600"
+        >
+          {manualOpen ? t.accManualHide : t.accManualShow}
+        </button>
+        {manualOpen && (
+          <>
+            <p className="mt-2 max-w-2xl text-[11px] leading-relaxed text-slate-500">{t.accOtherBizHelp}</p>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <input
+                type="password"
+                dir="ltr"
+                value={probeToken}
+                onChange={(e) => setProbeToken(e.target.value)}
+                placeholder={t.accTokenPh}
+                autoComplete="off"
+                className="tap w-80 max-w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs shadow-card"
+              />
+              <button
+                onClick={runProbe}
+                disabled={!probeToken.trim() || probing}
+                className="tap rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-medium text-white shadow-card hover:bg-brand-700 disabled:opacity-40"
+              >
+                {probing ? t.accProbing : t.accProbe}
+              </button>
+            </div>
+          </>
+        )}
         {probeErr && <p className="mt-2 text-[11px] text-red-600">{probeErr}</p>}
         {probe && probe.available.length === 0 && (
           <p className="mt-3 text-[11px] text-slate-500">{t.accProbeNone}</p>
