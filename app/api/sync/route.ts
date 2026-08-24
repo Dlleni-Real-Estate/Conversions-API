@@ -385,7 +385,11 @@ async function refreshFormSchemas(
     .gt("updated_at", weekAgo);
 
   const known = new Set((fresh ?? []).map((f: { form_id: string }) => f.form_id));
-  const stale = [...formIds].filter((id) => !known.has(id));
+  // At most 20 per run. A Page can carry years of old forms (one of ours has
+  // ~80), and each schema is its own Graph call - fetching them all in one go
+  // once a week would eat a third of the function's 60s budget. The stale set
+  // just drains across consecutive ten-minute runs instead.
+  const stale = [...formIds].filter((id) => !known.has(id)).slice(0, 20);
   if (stale.length === 0) return 0;
 
   const schemas = [];

@@ -184,10 +184,21 @@ export async function GET(req: NextRequest) {
     return leads.filter((l) => rankOf(l.status) >= need && rankOf(l.status) > 0).length;
   };
 
+  // Disqualified is a verdict, not an absence. Meta's own wording for the
+  // stage: leads "that received a phone call, but decided to not convert" -
+  // someone reached them and ruled them out. So the CONTACTED step counts
+  // them; leaving them out made the funnel claim the team never spoke to
+  // leads it had in fact worked and closed the book on, and every ratio
+  // downstream inherited the error. Deeper steps still exclude them: a
+  // current status of disqualified proves nothing about how far they climbed
+  // before the verdict.
+  const disqualifiedCount = leads.filter((l) => l.status === "disqualified").length;
+  const stepCount = (s: Status) => (s === "contacted" ? reachedCount(s) + disqualifiedCount : reachedCount(s));
+
   const total = leads.length;
   const funnel = [
     { status: "lead" as const, label: "Leads", count: total, fromPrev: null as number | null, ofTotal: 100 },
-    ...FUNNEL.map((s) => ({ status: s, label: STAGE_BY_STATUS[s].label, count: reachedCount(s) })),
+    ...FUNNEL.map((s) => ({ status: s, label: STAGE_BY_STATUS[s].label, count: stepCount(s) })),
   ].map((step, i, all) => {
     const prev = i === 0 ? null : all[i - 1].count;
     return {
