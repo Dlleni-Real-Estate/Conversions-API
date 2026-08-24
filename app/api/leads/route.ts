@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 
 const LEAD_COLUMNS =
   "lead_id,full_name,phone,email,status,status_at,notes,owner,deal_value,submitted_at," +
-  "campaign_id,campaign_name,adset_name,ad_id,ad_name,form_name,platform,raw_fields";
+  "campaign_id,campaign_name,adset_name,ad_id,ad_name,form_name,platform,raw_fields,quality_score";
 
 /** Still worth a phone call — the default working view. */
 const OPEN_STATUSES = [

@@ -67,6 +67,10 @@ export default function AdAccounts({ pw }: { pw: string }) {
   // section reads as one action - the blue button - instead of two competing
   // ones; "Check token" only ever belonged to the paste-a-token path.
   const [manualOpen, setManualOpen] = useState(false);
+  // Accounts outside the granted Businesses (personal ones included) fold
+  // away by default - they were the noise being complained about, and they
+  // are one click from coming back.
+  const [showUngrouped, setShowUngrouped] = useState(false);
   // How the current probe authenticated - a Facebook Login nonce or a pasted
   // token. Connect must use the SAME credential that listed the account.
   const [probeAuth, setProbeAuth] = useState<
@@ -191,8 +195,8 @@ export default function AdAccounts({ pw }: { pw: string }) {
   const notConnected = data.available.filter((a) => !connectedIds.has(a.id));
 
 
-  const connectProbed = async (a: Available, dataset: string, page: string) => {
-    if (!dataset) return;
+  const connectProbed = async (a: Available, dataset: string, page: string, createDataset = false) => {
+    if (!dataset && !createDataset) return;
     setBusy(a.id);
     setErr(null);
     try {
@@ -202,6 +206,7 @@ export default function AdAccounts({ pw }: { pw: string }) {
         body: JSON.stringify({
           ad_account_id: a.id,
           dataset_id: dataset,
+          ...(createDataset ? { create_dataset: true, dataset_name: `${a.name || a.id} - Lead Events` } : {}),
           name: a.name,
           // The credential that listed this account is the one that verifies
           // and gets stored with it - one token per pairing, end to end.
@@ -277,8 +282,8 @@ export default function AdAccounts({ pw }: { pw: string }) {
             {a.currency ? ` · ${a.currency}` : ""}
           </p>
           {blocked && (
-            <p className="mt-1.5 max-w-xl rounded-lg border border-amber-200 bg-amber-50 p-2 text-[11px] leading-relaxed text-amber-800">
-              {t.accNoDataset}
+            <p className="mt-1.5 max-w-xl rounded-lg border border-sky-200 bg-sky-50 p-2 text-[11px] leading-relaxed text-sky-800">
+              {t.accCreateDatasetHint}
             </p>
           )}
           {!blocked && src === "user" && (
@@ -316,13 +321,23 @@ export default function AdAccounts({ pw }: { pw: string }) {
               ))}
             </select>
           )}
-          <button
-            onClick={() => connectProbed(a, chosen, chosenPage)}
-            disabled={blocked || needsPage || busy === a.id}
-            className="tap rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-medium text-white shadow-card hover:bg-brand-700 disabled:opacity-40"
-          >
-            {busy === a.id ? t.accConnecting : t.accConnect}
-          </button>
+          {blocked ? (
+            <button
+              onClick={() => connectProbed(a, "", chosenPage, true)}
+              disabled={needsPage || busy === a.id}
+              className="tap rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-medium text-white shadow-card hover:bg-sky-700 disabled:opacity-40"
+            >
+              {busy === a.id ? t.accConnecting : t.accCreateDataset}
+            </button>
+          ) : (
+            <button
+              onClick={() => connectProbed(a, chosen, chosenPage)}
+              disabled={needsPage || busy === a.id}
+              className="tap rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-medium text-white shadow-card hover:bg-brand-700 disabled:opacity-40"
+            >
+              {busy === a.id ? t.accConnecting : t.accConnect}
+            </button>
+          )}
         </div>
       </Card>
     );
@@ -547,9 +562,10 @@ export default function AdAccounts({ pw }: { pw: string }) {
           <p className="mt-3 text-[11px] text-slate-500">{t.accProbeNone}</p>
         )}
         {probe && (() => {
-          // Grouped by owning Business: one Facebook account routinely manages
-          // several, and a flat list of similar names across Businesses is how
-          // the wrong account gets connected.
+          // Grouped by owning Business, and ONLY the granted Businesses show
+          // by default. Everything else - personal ad accounts included - was
+          // the noise that made the picker unreadable, so it folds behind one
+          // small toggle instead of competing with the accounts that matter.
           const groups = new Map<string, Available[]>();
           for (const a of probe.available) {
             const k = a.business_name || "";
@@ -560,18 +576,37 @@ export default function AdAccounts({ pw }: { pw: string }) {
           const ordered = [...groups.entries()].sort((x, y) =>
             x[0] === "" ? 1 : y[0] === "" ? -1 : x[0].localeCompare(y[0])
           );
-          return ordered.map(([biz, accs]) => (
-            <div key={biz || "_none"} className="mt-3">
-              {groups.size > 1 && (
-                <p dir="auto" className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                  {biz || t.accPersonalAccounts}
-                </p>
+          const grouped = ordered.filter(([biz]) => biz !== "");
+          const ungrouped = ordered.find(([biz]) => biz === "")?.[1] ?? [];
+          return (
+            <>
+              {grouped.map(([biz, accs]) => (
+                <div key={biz} className="mt-3">
+                  <p dir="auto" className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                    {biz}
+                  </p>
+                  <div className="space-y-3">
+                    {accs.map((a) => (connectedIds.has(a.id) ? refreshRow(a) : probeCard(a)))}
+                  </div>
+                </div>
+              ))}
+              {ungrouped.length > 0 && (
+                <div className="mt-3">
+                  <button
+                    onClick={() => setShowUngrouped((v) => !v)}
+                    className="tap text-[11px] font-medium text-slate-400 underline decoration-dotted underline-offset-2 hover:text-slate-600"
+                  >
+                    {showUngrouped ? t.accHideUngrouped : t.accShowUngrouped(ungrouped.length)}
+                  </button>
+                  {showUngrouped && (
+                    <div className="mt-2 space-y-3">
+                      {ungrouped.map((a) => (connectedIds.has(a.id) ? refreshRow(a) : probeCard(a)))}
+                    </div>
+                  )}
+                </div>
               )}
-              <div className="space-y-3">
-                {accs.map((a) => (connectedIds.has(a.id) ? refreshRow(a) : probeCard(a)))}
-              </div>
-            </div>
-          ));
+            </>
+          );
         })()}
       </Card>
     </section>

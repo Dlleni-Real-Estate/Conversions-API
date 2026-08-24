@@ -4,8 +4,16 @@ import { useEffect, useState } from "react";
 import { Card, SectionTitle } from "./ui";
 import { useLang } from "./LangProvider";
 
+type EmqEvent = {
+  event_name: string;
+  score: number | null;
+  match_keys: { identifier: string; coverage: number }[];
+};
+
 type Health = {
   ok: boolean;
+  role?: "admin" | "viewer" | "cron" | null;
+  emq?: { dataset_id: string; account: string; events: EmqEvent[] }[];
   sender: "app" | "crm";
   crmConfigured: boolean;
   senders: { app: boolean; crmApiConfigured: boolean; crmIntegrationOn: boolean | null };
@@ -67,9 +75,16 @@ export default function HealthPanel({ pw }: { pw: string }) {
 
   const capiBad = h.capi7d.failed > 0;
 
+  const worstEmq = (h.emq ?? [])
+    .flatMap((d) => d.events.map((e) => e.score ?? 10))
+    .reduce((min, v) => Math.min(min, v), 10);
+
   return (
     <section>
       <SectionTitle title={t.healthTitle} subtitle={t.healthSub} />
+      {h.role === "viewer" && (
+        <p className="mb-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">{t.viewerNotice}</p>
+      )}
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         <Card className="p-4">
           <p className="text-xs font-medium text-slate-500">{t.hSender}</p>
@@ -104,6 +119,55 @@ export default function HealthPanel({ pw }: { pw: string }) {
             <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-[11px] leading-relaxed text-amber-800">
               {t.hAccTokenExpiring}: {h.accounts?.tokenExpiring?.join(", ")}
             </p>
+          )}
+        </Card>
+
+        <Card className="p-4 sm:col-span-2 xl:col-span-3">
+          <p className="text-xs font-medium text-slate-500">{t.hEmqTitle}</p>
+          {(h.emq?.length ?? 0) === 0 ? (
+            <p className="mt-1 text-sm text-slate-500">{t.hEmqNone}</p>
+          ) : (
+            <>
+              <p className="mt-1 text-[11px] leading-relaxed text-slate-500">{t.hEmqSub}</p>
+              {worstEmq < 6 && (
+                <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-[11px] leading-relaxed text-amber-800">
+                  {t.hEmqWeak}
+                </p>
+              )}
+              <div className="mt-3 space-y-3">
+                {h.emq?.map((d) => (
+                  <div key={d.dataset_id}>
+                    <p className="text-[11px] font-semibold text-slate-600">
+                      <span dir="auto">{d.account}</span>{" "}
+                      <span className="ltr-nums font-normal text-slate-400">{d.dataset_id}</span>
+                    </p>
+                    <div className="mt-1.5 flex flex-wrap gap-2">
+                      {d.events.map((e) => {
+                        const s = e.score;
+                        const tone =
+                          s == null
+                            ? "border-slate-200 bg-slate-50 text-slate-500"
+                            : s >= 6
+                              ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                              : s >= 4.5
+                                ? "border-amber-200 bg-amber-50 text-amber-700"
+                                : "border-red-200 bg-red-50 text-red-700";
+                        const keys = e.match_keys.map((k) => `${k.identifier} ${Math.round(k.coverage)}%`).join(" · ");
+                        return (
+                          <span
+                            key={e.event_name}
+                            title={keys || undefined}
+                            className={`rounded-lg border px-2 py-1 text-[11px] font-medium ${tone}`}
+                          >
+                            {e.event_name} <b className="ltr-nums">{s ?? "?"}</b>/10
+                          </span>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
           )}
         </Card>
 

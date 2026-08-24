@@ -23,6 +23,7 @@ const AD_COLUMNS: { key: SortKey; tk: keyof ReturnType<typeof useLang>["t"]; kin
   { key: "meta_cost_per_lead", tk: "tMetaCostLead", kind: "money2" },
   { core: true, key: "leads", tk: "tLeads", kind: "int" },
   { core: true, key: "cost_per_lead", tk: "tCostLead", kind: "money2" },
+  { core: true, key: "avg_quality", tk: "tAvgQuality", kind: "int" },
   { core: true, key: "qualified", tk: "tQual", kind: "int" },
   { core: true, key: "qualified_pct", tk: "tQualPct", kind: "pct" },
   { core: true, key: "cost_per_qualified", tk: "tCostQual", kind: "money2" },
@@ -95,6 +96,7 @@ export default function AnalyticsView({
                   <Th>{t.tNoAnswerCol}</Th>
                   <Th>{t.tQual}</Th>
                   <Th>{t.tQualPct}</Th>
+                  <Th>{t.tAvgQuality}</Th>
                   <Th>{t.tCostLead}</Th>
                   <Th>{t.tCostQual}</Th>
                   <Th>{t.tResv}</Th>
@@ -124,6 +126,23 @@ export default function AnalyticsView({
                     </Td>
                     <Td>{fmtInt(c.no_answer)}</Td>
                     <Td>{fmtInt(c.qualified)}</Td>
+                    <Td>
+                      {c.avg_quality != null ? (
+                        <span
+                          className={`rounded-md px-1.5 py-0.5 text-xs font-semibold ${
+                            c.avg_quality >= 55
+                              ? "bg-emerald-50 text-emerald-700"
+                              : c.avg_quality >= 30
+                                ? "bg-amber-50 text-amber-700"
+                                : "bg-slate-100 text-slate-500"
+                          }`}
+                        >
+                          {c.avg_quality}
+                        </span>
+                      ) : (
+                        "\u2014"
+                      )}
+                    </Td>
                     <Td>
                       <span className={
                         c.qualified_pct == null ? "" : c.qualified_pct >= 10 ? "font-semibold text-emerald-600" : c.qualified_pct < 3 ? "text-red-600" : ""

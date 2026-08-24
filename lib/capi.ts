@@ -65,6 +65,14 @@ export type CapiInput = {
   email?: string;
   value?: number | null;
   currency?: string;
+  /**
+   * Lead quality score 0-100 (lib/quality.ts). Carried as named metadata on
+   * every event, and used as `value` by callers on non-reservation stages so
+   * value-optimised delivery learns to prefer the expensive lead. Reservation
+   * keeps the real deal figure - a 100-point score must never masquerade as
+   * hundred-EGP revenue next to a five-million-EGP reservation.
+   */
+  qualityScore?: number | null;
 };
 
 export function buildEvent(input: CapiInput) {
@@ -88,6 +96,9 @@ export function buildEvent(input: CapiInput) {
   if (input.value != null && Number.isFinite(input.value)) {
     custom_data.value = input.value;
     custom_data.currency = input.currency || "EGP";
+  }
+  if (input.qualityScore != null && Number.isFinite(input.qualityScore)) {
+    custom_data.lead_quality_score = Math.round(input.qualityScore);
   }
 
   return {

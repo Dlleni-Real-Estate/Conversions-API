@@ -60,7 +60,7 @@ export async function GET(req: NextRequest) {
   let leadQuery = db
     .from("leads")
     .select(
-      "lead_id,status,submitted_at,status_at,deal_value,ad_id,ad_name,campaign_id,campaign_name,platform,raw_fields"
+      "lead_id,status,submitted_at,status_at,deal_value,ad_id,ad_name,campaign_id,campaign_name,platform,raw_fields,quality_score"
     )
     .order("submitted_at", { ascending: false })
     .limit(5000);
@@ -87,6 +87,26 @@ export async function GET(req: NextRequest) {
 
   const leads = (leadsRaw ?? []) as LeadRow[];
   const ads = (adsRaw ?? []) as Record<string, number | string | null>[];
+
+  // Average quality score per ad, folded into the ad rows. The stage columns
+  // already say which creative FILLS forms; the score says which creative
+  // brings leads worth calling - two different questions about the same ad.
+  {
+    const perAd = new Map<string, { sum: number; n: number }>();
+    for (const l of leads) {
+      const adId = l.ad_id as string | null;
+      const q = (l as { quality_score?: number | null }).quality_score;
+      if (!adId || q == null) continue;
+      const cur = perAd.get(adId) ?? { sum: 0, n: 0 };
+      cur.sum += q;
+      cur.n += 1;
+      perAd.set(adId, cur);
+    }
+    for (const row of ads) {
+      const hit = perAd.get(String(row.ad_id ?? ""));
+      row.avg_quality = hit ? Math.round(hit.sum / hit.n) : null;
+    }
+  }
   const ci = (ciRaw ?? []) as CampaignInsightRow[];
 
   // ── Delivery and money: Meta's own numbers, not ours ─────────────────────
@@ -290,6 +310,12 @@ export async function GET(req: NextRequest) {
         disqualified: mine.filter((l) => l.status === "disqualified").length,
         qualified: q,
         qualified_pct: pct(q, mine.length),
+        avg_quality: (() => {
+          const qs = mine
+            .map((l) => (l as { quality_score?: number | null }).quality_score)
+            .filter((v): v is number => v != null);
+          return qs.length > 0 ? Math.round(qs.reduce((a, b) => a + b, 0) / qs.length) : null;
+        })(),
         reservations: resv,
         cost_per_lead: mine.length && spendHere ? money(spendHere / mine.length) : null,
         cost_per_qualified: q && spendHere ? money(spendHere / q) : null,

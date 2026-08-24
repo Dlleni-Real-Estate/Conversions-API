@@ -7,6 +7,7 @@ import AnalyticsView from "@/components/AnalyticsView";
 import CampaignSettings from "@/components/CampaignSettings";
 import HealthPanel from "@/components/HealthPanel";
 import AdAccounts from "@/components/AdAccounts";
+import AuditPanel from "@/components/AuditPanel";
 import { LangProvider, LangSwitch, useLang } from "@/components/LangProvider";
 import type { FormDictionary } from "@/lib/labels";
 import type { Analytics, Lead } from "@/components/types";
@@ -260,6 +261,7 @@ function Dashboard() {
           <HealthPanel pw={pw} />
           <AdAccounts pw={pw} />
           <CampaignSettings pw={pw} />
+          <AuditPanel pw={pw} />
         </div>
         </div>
 

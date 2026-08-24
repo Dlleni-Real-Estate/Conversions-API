@@ -3,6 +3,9 @@ import { supabaseAdmin } from "@/lib/supabase";
 import { isAuthed } from "@/lib/auth";
 import { SENDER, APP_SENDS_EVENTS } from "@/lib/sender";
 import { CRM_CONFIGURED } from "@/lib/crm";
+import { activeAccounts } from "@/lib/accounts";
+import { datasetQuality, type EmqEvent } from "@/lib/meta";
+import { roleOf } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 15;
@@ -58,8 +61,26 @@ export async function GET(req: NextRequest) {
   };
   const rows = (accountRows.data ?? []) as AccountRow[];
 
+  // Event Match Quality per active dataset - the number that tells the truth
+  // when every other light is green. Events accepted with weak EMQ feed the
+  // optimiser almost nothing; the composite is out of 10, and Meta's own
+  // bands put "good" at 6 and "poor" under 4.5.
+  const { scopes } = await activeAccounts(db);
+  const seen = new Set<string>();
+  const emq: { dataset_id: string; account: string; events: EmqEvent[] }[] = [];
+  await Promise.all(
+    scopes
+      .filter((s) => (seen.has(s.datasetId) ? false : (seen.add(s.datasetId), true)))
+      .map(async (s) => {
+        const events = await datasetQuality(s.datasetId, s.token);
+        if (events.length > 0) emq.push({ dataset_id: s.datasetId, account: s.name || s.adAccountId, events });
+      })
+  );
+
   return NextResponse.json({
     ok: true,
+    role: roleOf(req),
+    emq,
     sender: SENDER,
     appSends: APP_SENDS_EVENTS,
     crmConfigured: CRM_CONFIGURED,

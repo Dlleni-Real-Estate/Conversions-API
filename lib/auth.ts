@@ -20,10 +20,30 @@ export function isCron(req: NextRequest): boolean {
   return safeEqual(header, `Bearer ${secret}`);
 }
 
-export function isAuthed(req: NextRequest): boolean {
-  if (isCron(req)) return true;
-  const pw = process.env.APP_PASSWORD;
-  if (!pw) return false;
+export type Role = "admin" | "viewer" | "cron";
+
+/**
+ * Two passwords, two roles. APP_PASSWORD is the full-control password;
+ * APP_PASSWORD_VIEWER (optional) opens every read-only screen for the team
+ * and nothing else. Mutating endpoints demand isAdmin; everything else takes
+ * either. The comparison stays constant-time for both.
+ */
+export function roleOf(req: NextRequest): Role | null {
+  if (isCron(req)) return "cron";
   const given = req.headers.get("x-app-password") || "";
-  return safeEqual(given, pw);
+  const admin = process.env.APP_PASSWORD;
+  if (admin && safeEqual(given, admin)) return "admin";
+  const viewer = process.env.APP_PASSWORD_VIEWER;
+  if (viewer && safeEqual(given, viewer)) return "viewer";
+  return null;
+}
+
+export function isAuthed(req: NextRequest): boolean {
+  return roleOf(req) !== null;
+}
+
+/** The cron writes as part of its job, so it counts as admin. */
+export function isAdmin(req: NextRequest): boolean {
+  const r = roleOf(req);
+  return r === "admin" || r === "cron";
 }

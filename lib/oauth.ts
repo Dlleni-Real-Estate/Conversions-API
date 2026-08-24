@@ -16,6 +16,7 @@
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { supabaseAdmin } from "./supabase";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type DB = SupabaseClient<any, any, any>;
@@ -36,8 +37,10 @@ const TTL_MS = 60 * 60 * 1000;
 export function oauthScopes(): string {
   // Everything the per-account calls make: list accounts and datasets
   // (ads_read, business_management), resolve the Page and read its leads
-  // (pages_show_list, pages_manage_ads, leads_retrieval).
-  return "ads_read,pages_show_list,pages_manage_ads,leads_retrieval,business_management";
+  // (pages_show_list, pages_manage_ads, leads_retrieval), and CREATE a
+  // dataset on an account that has none (ads_management) - the one-click
+  // replacement for the manual Business Settings walk.
+  return "ads_read,ads_management,pages_show_list,pages_manage_ads,leads_retrieval,business_management";
 }
 
 export async function createState(db: DB): Promise<string> {
@@ -110,6 +113,76 @@ export async function exchangeCode(code: string, redirectUri: string): Promise<s
   // If the long-lived exchange hiccups, the short-lived token still works for
   // the connect flow; it just expires sooner and health will say so.
   return (r2.ok && j2.access_token) || j.access_token;
+}
+
+/**
+ * Try to renew a long-lived token BEFORE it dies, with the same exchange that
+ * minted it. Meta sometimes answers with the very same token (nothing gained,
+ * nothing lost) and sometimes with a fresh 60-day one; when the exchange stops
+ * working the health warning still stands and a two-click re-login remains
+ * the fallback. Called by the hourly cron for tokens inside the warning
+ * window, so a healthy setup never actually reaches expiry.
+ */
+export async function refreshLongLivedToken(oldToken: string): Promise<{ token: string; expiresAt: string | null } | null> {
+  if (!OAUTH_CONFIGURED) return null;
+  try {
+    const r = await fetch(
+      `${GRAPH}/oauth/access_token?` +
+        new URLSearchParams({
+          grant_type: "fb_exchange_token",
+          client_id: process.env.META_APP_ID || "",
+          client_secret: process.env.META_APP_SECRET || "",
+          fb_exchange_token: oldToken,
+        })
+    );
+    const j = (await r.json().catch(() => ({}))) as { access_token?: string };
+    if (!r.ok || !j.access_token) return null;
+    const expiresAt = await tokenExpiry(j.access_token);
+    return { token: j.access_token, expiresAt };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Renew every stored token that dies within ten days. Lives here - not in a
+ * route - because the only guaranteed scheduler this deployment has is the
+ * /api/sync pinger; the replay route calls this too, but nothing proves
+ * anything calls the replay route. Belt and suspenders, cheap on both.
+ */
+export async function renewExpiringTokens(): Promise<{ checked: number; refreshed: number; failed: number }> {
+  const db = supabaseAdmin();
+  const horizon = new Date(Date.now() + 10 * 24 * 3600_000).toISOString();
+  const { data: rows } = await db
+    .from("ad_accounts")
+    .select("ad_account_id, access_token, token_expires_at")
+    .not("access_token", "is", null)
+    .not("token_expires_at", "is", null)
+    .lt("token_expires_at", horizon);
+
+  let refreshed = 0;
+  let failed = 0;
+  for (const r of rows ?? []) {
+    const renewed = await refreshLongLivedToken(r.access_token as string);
+    const newExpiry = renewed ? renewed.expiresAt ?? (await tokenExpiry(renewed.token)) : null;
+    // A same-token answer with the same horizon is not a renewal.
+    if (renewed && newExpiry && newExpiry > (r.token_expires_at as string)) {
+      await db
+        .from("ad_accounts")
+        .update({ access_token: renewed.token, token_expires_at: newExpiry, last_error: null })
+        .eq("ad_account_id", r.ad_account_id);
+      refreshed++;
+      console.log(`[token] renewed for ${r.ad_account_id}: now expires ${newExpiry.slice(0, 10)}`);
+    } else {
+      failed++;
+      await db
+        .from("ad_accounts")
+        .update({ last_error: "token auto-renew declined by Meta - renew with Facebook Login" })
+        .eq("ad_account_id", r.ad_account_id);
+      console.warn(`[token] auto-renew declined for ${r.ad_account_id}`);
+    }
+  }
+  return { checked: rows?.length ?? 0, refreshed, failed };
 }
 
 /**

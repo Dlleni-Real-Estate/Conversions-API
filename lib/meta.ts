@@ -150,6 +150,101 @@ export async function businessAccountIds(businessId: string, tokenOverride?: str
   return [...out];
 }
 
+/**
+ * Event Match Quality per event, from Meta's Dataset Quality API - the same
+ * numbers Events Manager shows. composite_score is out of 10. Events with no
+ * recent traffic are simply absent. Weak EMQ is the failure mode with green
+ * lights everywhere: events accepted, dashboard clean, and Meta quietly unable
+ * to match them back to people, so the optimisation feedback goes nowhere.
+ */
+export type EmqEvent = {
+  event_name: string;
+  score: number | null;
+  match_keys: { identifier: string; coverage: number }[];
+};
+
+export async function datasetQuality(datasetId: string, tokenOverride?: string): Promise<EmqEvent[]> {
+  const token = tokenOverride || metaConfig().token;
+  try {
+    const json = await graph<{
+      web?: {
+        event_name?: string;
+        event_match_quality?: {
+          composite_score?: number;
+          match_key_feedback?: { identifier?: string; coverage?: { percentage?: number } }[];
+        };
+      }[];
+    }>("/dataset_quality", { dataset_id: datasetId }, token);
+    return (json.web ?? []).map((e) => ({
+      event_name: e.event_name ?? "?",
+      score: typeof e.event_match_quality?.composite_score === "number" ? e.event_match_quality.composite_score : null,
+      match_keys: (e.event_match_quality?.match_key_feedback ?? []).map((k) => ({
+        identifier: k.identifier ?? "?",
+        coverage: k.coverage?.percentage ?? 0,
+      })),
+    }));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Pages that belong to an ad account's Business - owned or managed for
+ * clients. The picker offers THESE when the account itself names no Page,
+ * because a fourteen-Page personal list with an alphabetical default was how
+ * "AR Elite Properties" nearly became a lead source.
+ */
+export async function businessPages(businessId: string, tokenOverride?: string): Promise<{ id: string; name?: string }[]> {
+  const token = tokenOverride || metaConfig().token;
+  const out = new Map<string, { id: string; name?: string }>();
+  for (const edge of ["owned_pages", "client_pages"]) {
+    try {
+      const json = await graph<{ data?: { id: string; name?: string }[] }>(
+        `/${businessId}/${edge}`,
+        { fields: "id,name", limit: "100" },
+        token
+      );
+      for (const p of json.data ?? []) out.set(p.id, p);
+    } catch {
+      // An edge this token cannot read contributes nothing.
+    }
+  }
+  return [...out.values()];
+}
+
+/**
+ * Create a dataset ON the ad account, via POST /act_<id>/adspixels.
+ *
+ * The decisive property: a dataset created this way is born CONNECTED to that
+ * ad account - the pairing the whole system verifies before sending exists by
+ * construction, and the manual Business Settings walk disappears. Quality is
+ * not a dataset setting: it comes from what the events carry (lead_id, hashed
+ * phone and email), which lib/capi.ts already sends on every event.
+ */
+export async function createDataset(
+  adAccountId: string,
+  name: string,
+  tokenOverride?: string
+): Promise<{ id: string } | { error: string }> {
+  const token = tokenOverride || metaConfig().token;
+  const id = adAccountId.replace(/^act_/, "");
+  try {
+    const res = await fetch(`${GRAPH}/act_${id}/adspixels`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, access_token: token }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    const json = (await res.json().catch(() => ({}))) as { id?: string; error?: { message?: string } };
+    if (!res.ok || json.error || !json.id) {
+      return { error: json.error?.message || `HTTP ${res.status}` };
+    }
+    return { id: json.id };
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 /** Who actually signed in - shown so a wrong account is caught by eye. */
 export async function tokenOwnerName(tokenOverride?: string): Promise<string | null> {
   const token = tokenOverride || metaConfig().token;

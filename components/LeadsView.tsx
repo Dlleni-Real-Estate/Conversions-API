@@ -185,6 +185,20 @@ export default function LeadsView({
                           {stale && <span className="stale-dot h-2 w-2 shrink-0 rounded-full bg-orange-500" />}
                           <span dir="auto" className="truncate text-[15px] font-semibold text-slate-900">
                             {lead.full_name || t.unnamed}
+                            {lead.quality_score != null && (
+                              <span
+                                title={t.qualityScore}
+                                className={`ms-2 rounded-md px-1.5 py-0.5 text-[10px] font-bold ${
+                                  lead.quality_score >= 55
+                                    ? "bg-emerald-50 text-emerald-700"
+                                    : lead.quality_score >= 30
+                                      ? "bg-amber-50 text-amber-700"
+                                      : "bg-slate-100 text-slate-500"
+                                }`}
+                              >
+                                {lead.quality_score}
+                              </span>
+                            )}
                           </span>
                         </div>
                         {lead.phone && (

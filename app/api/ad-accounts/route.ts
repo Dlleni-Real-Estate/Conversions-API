@@ -2,9 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 import { isAuthed } from "@/lib/auth";
 import {
-  accountBusiness, businessAccountIds, datasetsForAccount, grantedBusinesses,
-  listAdAccounts, pagesForAccount, tokenOwnerName, verifyPairing,
+  accountBusiness, businessAccountIds, businessPages, createDataset, datasetsForAccount,
+  grantedBusinesses, listAdAccounts, pagesForAccount, tokenOwnerName, verifyPairing,
 } from "@/lib/meta";
+import { isAdmin } from "@/lib/auth";
+import { logAudit } from "@/lib/audit";
 import { tokenExpiry, tokenForNonce } from "@/lib/oauth";
 
 export const dynamic = "force-dynamic";
@@ -86,6 +88,7 @@ export async function POST(req: NextRequest) {
   const body = (await req.json().catch(() => null)) as {
     ad_account_id?: string; dataset_id?: string; page_id?: string; name?: string; enabled?: boolean;
     access_token?: string; probe_token?: string; oauth_nonce?: string;
+    create_dataset?: boolean; dataset_name?: string;
   } | null;
 
   // A Facebook Login hands the browser a nonce, never the token; the token
@@ -106,28 +109,12 @@ export async function POST(req: NextRequest) {
   const probeToken = (body?.probe_token || "").trim() || (!body?.ad_account_id && nonceToken ? nonceToken : "");
   if (probeToken) {
     try {
-      const available = await listAdAccounts(probeToken);
-      const datasets: Record<string, { id: string; name?: string }[]> = {};
-      const pages: Record<string, { id: string; name?: string }[]> = {};
-      const pageSource: Record<string, string> = {};
-      await Promise.all(
-        available.map(async (a) => {
-          const [d, p] = await Promise.all([
-            datasetsForAccount(a.id, probeToken).catch(() => []),
-            pagesForAccount(a.id, probeToken).catch(
-              () => ({ pages: [] as { id: string; name?: string }[], source: "none" as const })
-            ),
-          ]);
-          datasets[a.id] = d;
-          pages[a.id] = p.pages;
-          pageSource[a.id] = p.source;
-        })
-      );
-      // Stamp each row's Business from the granted-Business side, because the
-      // business field on the account list is unreliable under granular
-      // consent - live, it came back empty for every row and the whole picker
-      // collapsed into "personal".
-      const [signedInAs, businesses] = await Promise.all([
+      // Businesses FIRST: they are the reliable grouping signal (the business
+      // field on the account list comes back empty under granular consent),
+      // and the per-account Page list is resolved THROUGH them - an account's
+      // Business owns the Pages that could plausibly run its lead forms.
+      const [available, signedInAs, businesses] = await Promise.all([
+        listAdAccounts(probeToken),
         tokenOwnerName(probeToken),
         grantedBusinesses(probeToken),
       ]);
@@ -145,6 +132,40 @@ export async function POST(req: NextRequest) {
         }
       }
 
+      const bizPagesCache = new Map<string, { id: string; name?: string }[]>();
+      const pagesOfBusiness = async (bizId: string) => {
+        if (!bizPagesCache.has(bizId)) bizPagesCache.set(bizId, await businessPages(bizId, probeToken));
+        return bizPagesCache.get(bizId)!;
+      };
+
+      const datasets: Record<string, { id: string; name?: string }[]> = {};
+      const pages: Record<string, { id: string; name?: string }[]> = {};
+      const pageSource: Record<string, string> = {};
+      await Promise.all(
+        available.map(async (a) => {
+          const [d, p] = await Promise.all([
+            datasetsForAccount(a.id, probeToken).catch(() => []),
+            pagesForAccount(a.id, probeToken).catch(
+              () => ({ pages: [] as { id: string; name?: string }[], source: "none" as const })
+            ),
+          ]);
+          datasets[a.id] = d;
+          if (p.source === "account") {
+            pages[a.id] = p.pages;
+            pageSource[a.id] = "account";
+          } else if (a.business_id) {
+            // Narrow the fallback to the Pages this account's Business owns
+            // or manages - not the signed-in user's entire fourteen-Page life.
+            const bp = await pagesOfBusiness(a.business_id);
+            pages[a.id] = bp.length > 0 ? bp : p.pages;
+            pageSource[a.id] = bp.length > 0 ? "business" : p.source;
+          } else {
+            pages[a.id] = p.pages;
+            pageSource[a.id] = p.source;
+          }
+        })
+      );
+
       return NextResponse.json({
         ok: true, probe: true, available, datasets, pages, pageSource, signedInAs, businesses,
       });
@@ -158,15 +179,37 @@ export async function POST(req: NextRequest) {
 
   const accountId = (body?.ad_account_id || "").replace(/^act_/, "").trim();
   if (!accountId) return NextResponse.json({ error: "ad_account_id is required" }, { status: 400 });
+  if (!isAdmin(req)) return NextResponse.json({ error: "viewer access is read-only" }, { status: 403 });
 
   // Toggle: no re-verification, because the pairing did not change.
   if (typeof body?.enabled === "boolean" && !body.dataset_id) {
     const { error } = await db.from("ad_accounts").update({ enabled: body.enabled }).eq("ad_account_id", accountId);
+    await logAudit(req, body.enabled ? "account_resume" : "account_pause", accountId);
     if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
     return NextResponse.json({ ok: true, ad_account_id: accountId, enabled: body.enabled });
   }
 
-  const datasetId = (body?.dataset_id || "").trim();
+  let datasetId = (body?.dataset_id || "").trim();
+
+  // One click instead of the Business Settings walk: create the dataset ON
+  // the ad account. Born connected, so the verification below passes by
+  // construction - and if it somehow does not, nothing was stored.
+  if (!datasetId && body?.create_dataset) {
+    const created = await createDataset(
+      accountId,
+      (body?.dataset_name || "").trim() || `${(body?.name || "CRM").trim()} - Lead Events`,
+      (body?.access_token || "").trim() || nonceToken || undefined
+    );
+    if ("error" in created) {
+      return NextResponse.json(
+        { ok: false, error: `Could not create a dataset on ${accountId}: ${created.error}` },
+        { status: 400 }
+      );
+    }
+    datasetId = created.id;
+    await logAudit(req, "dataset_create", accountId, { dataset_id: datasetId });
+  }
+
   if (!datasetId) return NextResponse.json({ error: "dataset_id is required" }, { status: 400 });
 
   // An account from another Business carries its own token, and THAT token is
@@ -276,6 +319,10 @@ export async function POST(req: NextRequest) {
   );
   if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
 
+  await logAudit(req, "account_connect", accountId, {
+    dataset_id: datasetId, page_id: pageId || null, own_token: Boolean(ownToken),
+  });
+
   return NextResponse.json({
     ok: true, ad_account_id: accountId, dataset_id: datasetId, page_id: pageId || null, verified: true,
   });
@@ -283,6 +330,7 @@ export async function POST(req: NextRequest) {
 
 export async function DELETE(req: NextRequest) {
   if (!isAuthed(req)) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  if (!isAdmin(req)) return NextResponse.json({ error: "viewer access is read-only" }, { status: 403 });
   const accountId = (req.nextUrl.searchParams.get("ad_account_id") || "").replace(/^act_/, "");
   if (!accountId) return NextResponse.json({ error: "ad_account_id is required" }, { status: 400 });
 
@@ -290,5 +338,6 @@ export async function DELETE(req: NextRequest) {
   // after a disconnect, and reconnecting later picks up exactly where it left.
   const { error } = await supabaseAdmin().from("ad_accounts").delete().eq("ad_account_id", accountId);
   if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+  await logAudit(req, "account_disconnect", accountId);
   return NextResponse.json({ ok: true, ad_account_id: accountId, removed: true });
 }

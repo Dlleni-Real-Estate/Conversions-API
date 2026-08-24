@@ -4,6 +4,9 @@ import { isAuthed } from "@/lib/auth";
 import { chainFor, isStatus, STAGE_BY_STATUS, type Status } from "@/lib/stages";
 import { sendLeadEvents } from "@/lib/capi";
 import { activeAccounts } from "@/lib/accounts";
+import { leadQualityScore } from "@/lib/quality";
+import { isAdmin } from "@/lib/auth";
+import { logAudit } from "@/lib/audit";
 import { APP_SENDS_EVENTS, SENDER } from "@/lib/sender";
 
 export const dynamic = "force-dynamic";
@@ -14,6 +17,7 @@ export const dynamic = "force-dynamic";
  */
 export async function POST(req: NextRequest) {
   if (!isAuthed(req)) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  if (!isAdmin(req)) return NextResponse.json({ error: "viewer access is read-only" }, { status: 403 });
 
   // The dashboard is read-only, and when the CRM owns the Meta conversation
   // this endpoint must refuse rather than quietly double-send.
@@ -52,7 +56,7 @@ export async function POST(req: NextRequest) {
       status_at: new Date().toISOString(),
     })
     .eq("lead_id", body.lead_id)
-    .select("lead_id, phone, email, deal_value, status, ad_account_id")
+    .select("lead_id, phone, email, deal_value, status, ad_account_id, submitted_at, status_at, raw_fields")
     .single();
 
   if (error || !lead) {
@@ -107,6 +111,16 @@ export async function POST(req: NextRequest) {
   // Ordered timestamps ending now, so the sequence Meta reads is the sequence
   // the lead actually walked, and every one of them sits after the lead's
   // creation time (Meta discards an event stamped before its lead existed).
+  const score = leadQualityScore({
+    status: lead.status as Status,
+    submitted_at: lead.submitted_at ?? null,
+    status_at: lead.status_at ?? null,
+    raw_fields: lead.raw_fields ?? null,
+    phone: lead.phone ?? null,
+    email: lead.email ?? null,
+  });
+  await db.from("leads").update({ quality_score: score }).eq("lead_id", lead.lead_id);
+
   const now = Date.now();
   const result = await sendLeadEvents(
     chain.map((st, i) => ({
@@ -115,12 +129,15 @@ export async function POST(req: NextRequest) {
       eventTime: new Date(now - (chain.length - 1 - i) * 1000),
       phone: lead.phone ?? undefined,
       email: lead.email ?? undefined,
-      value: st.status === "reservation" ? (body.deal_value ?? lead.deal_value ?? null) : null,
+      value: st.status === "reservation" ? (body.deal_value ?? lead.deal_value ?? null) : score,
+      qualityScore: score,
     })),
     100,
     scope?.datasetId,
     scope?.token
   );
+
+  await logAudit(req, "stage_change", lead.lead_id, { from: before?.status ?? null, to: status });
 
   return NextResponse.json({
     ok: true,

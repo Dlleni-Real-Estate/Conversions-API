@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 import { consumeState, exchangeCode, storeToken } from "@/lib/oauth";
+import { tokenOwnerName } from "@/lib/meta";
 
 export const dynamic = "force-dynamic";
 
@@ -32,6 +33,13 @@ export async function GET(req: NextRequest) {
   try {
     const token = await exchangeCode(code, `https://${req.nextUrl.host}/api/oauth/callback`);
     await storeToken(db, state, token);
+    // Audited directly (not via logAudit): the browser arrives here bare, so
+    // there is no role header to read - the event itself is the identity.
+    const who = await tokenOwnerName(token);
+    await db.from("audit_log").insert({
+      actor: "facebook_login", action: "oauth_signin", subject: who,
+      ip: (req.headers.get("x-forwarded-for") || "").split(",")[0].trim() || null,
+    });
     return back(`oauth_done=${state}`);
   } catch (err) {
     return back(`oauth_error=${encodeURIComponent(err instanceof Error ? err.message : String(err))}`);

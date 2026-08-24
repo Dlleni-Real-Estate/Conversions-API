@@ -20,6 +20,7 @@ export type Lead = {
   form_name: string | null;
   platform: string | null;
   raw_fields: Record<string, string> | null;
+  quality_score?: number | null;
   note_count?: number;
   rank?: number;
 };
@@ -55,6 +56,7 @@ export type AdRow = {
   site_visits_done: number;
   eoi: number;
   reservations: number;
+  avg_quality?: number | null;
   disqualified: number;
   reservation_value: number;
   qualified_pct: number | null;
@@ -78,6 +80,7 @@ export type CampaignBoardRow = {
   disqualified: number;
   qualified: number;
   qualified_pct: number | null;
+  avg_quality?: number | null;
   reservations: number;
   cost_per_lead: number | null;
   cost_per_qualified: number | null;

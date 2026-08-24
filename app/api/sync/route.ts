@@ -17,6 +17,8 @@ import { supabaseAdmin } from "@/lib/supabase";
 import { isAuthed } from "@/lib/auth";
 import { capiEventId, sendLeadEvents } from "@/lib/capi";
 import { chainFor, type Status } from "@/lib/stages";
+import { leadQualityScore } from "@/lib/quality";
+import { renewExpiringTokens } from "@/lib/oauth";
 import { APP_SENDS_EVENTS, SENDER } from "@/lib/sender";
 import { CRM_CONFIGURED, crmPage, drainUnknownUserIds, pickLastNote, pickOwner, statusFromCrmStatusId } from "@/lib/crm";
 
@@ -229,6 +231,17 @@ export async function GET(req: NextRequest) {
     // only thing that fills `status`; nobody types stages into this app.
     crm = await syncCrmStatuses(db);
 
+    // Quality scores follow every stage move the mirror just brought in.
+    await refreshQualityScores(db);
+
+    // Once an hour on the sync that lands in the first ten-minute slot: renew
+    // any Facebook Login token inside its warning window. This is the only
+    // schedule the deployment guarantees, so the renewal lives on it.
+    if (new Date().getUTCMinutes() < 10) {
+      const t = await renewExpiringTokens();
+      if (t.checked > 0) console.log(`[sync] tokens: checked=${t.checked} renewed=${t.refreshed} declined=${t.failed}`);
+    }
+
     // Every stage each lead has reached, for any that never made it to Meta.
     stageEvents = await sendMissingStageEvents(db);
 
@@ -392,7 +405,7 @@ async function sendMissingStageEvents(
 
   const { data: recent, error: leadErr } = await db
     .from("leads")
-    .select("lead_id, phone, email, status, deal_value, ad_account_id")
+    .select("lead_id, phone, email, status, deal_value, ad_account_id, quality_score, submitted_at, status_at, raw_fields")
     .gte("submitted_at", sevenDaysAgo)
     .order("submitted_at", { ascending: false })
     .limit(limit);
@@ -426,7 +439,23 @@ async function sendMissingStageEvents(
     status: Status;
     deal_value: number | null;
     ad_account_id: string | null;
+    quality_score: number | null;
+    submitted_at: string | null;
+    status_at: string | null;
+    raw_fields: Record<string, unknown> | null;
   }[]) {
+    // The score travels with every event: as metadata always, and as value on
+    // everything except reservation, where the real deal figure wins.
+    const score =
+      lead.quality_score ??
+      leadQualityScore({
+        status: lead.status,
+        submitted_at: lead.submitted_at,
+        status_at: lead.status_at,
+        raw_fields: lead.raw_fields,
+        phone: lead.phone,
+        email: lead.email,
+      });
     // One shared definition — see chainFor. This used to be spelled out here
     // and it was missing the `rank >= 1` bound, so every qualified lead was
     // also reported to Meta as NoAnswer AND Disqualified.
@@ -446,7 +475,8 @@ async function sendMissingStageEvents(
         eventTime: new Date(now - (chain.length - 1 - i) * 1000),
         phone: lead.phone ?? undefined,
         email: lead.email ?? undefined,
-        value: st.status === "reservation" ? lead.deal_value : null,
+        value: st.status === "reservation" ? lead.deal_value : score,
+        qualityScore: score,
       });
     });
   }
@@ -519,6 +549,51 @@ async function sendMissingStageEvents(
   return sent;
 }
 
+
+/**
+ * Recompute quality scores for recent leads and store what changed.
+ *
+ * Cheap by construction: one read, pure functions, and only rows whose score
+ * actually moved get written back. Runs after the CRM mirror so a stage move
+ * reprices the lead in the same sync that learned about it.
+ */
+async function refreshQualityScores(db: ReturnType<typeof supabaseAdmin>, limit = 400): Promise<number> {
+  const since = new Date(Date.now() - 30 * 24 * 3600_000).toISOString();
+  const { data: rows } = await db
+    .from("leads")
+    .select("lead_id, status, submitted_at, status_at, raw_fields, phone, email, quality_score")
+    .gte("submitted_at", since)
+    .order("submitted_at", { ascending: false })
+    .limit(limit);
+
+  if (!rows || rows.length === 0) return 0;
+
+  const changed: { lead_id: string; score: number }[] = [];
+  for (const r of rows) {
+    const score = leadQualityScore({
+      status: r.status as Status,
+      submitted_at: r.submitted_at as string | null,
+      status_at: r.status_at as string | null,
+      raw_fields: r.raw_fields as Record<string, unknown> | null,
+      phone: r.phone as string | null,
+      email: r.email as string | null,
+    });
+    if (score !== r.quality_score) changed.push({ lead_id: r.lead_id as string, score });
+  }
+
+  // Individual updates, deliberately: an upsert would have to restate NOT NULL
+  // columns, and a wrong restatement is worse than a few extra round-trips.
+  for (let i = 0; i < changed.length; i += 10) {
+    await Promise.all(
+      changed.slice(i, i + 10).map((c) =>
+        db.from("leads").update({ quality_score: c.score }).eq("lead_id", c.lead_id)
+      )
+    );
+  }
+
+  if (changed.length > 0) console.log(`[sync] quality: rescored ${changed.length}/${rows.length} lead(s)`);
+  return changed.length;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 8X CRM -> this app

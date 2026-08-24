@@ -3,7 +3,8 @@ import { listCampaigns, type Campaign } from "@/lib/meta";
 import { activeAccounts } from "@/lib/accounts";
 import { resolveCampaigns, setCutoff, setOverride, clearOverride } from "@/lib/tracking";
 import { supabaseAdmin } from "@/lib/supabase";
-import { isAuthed } from "@/lib/auth";
+import { isAdmin, isAuthed } from "@/lib/auth";
+import { logAudit } from "@/lib/audit";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -79,6 +80,7 @@ export async function GET(req: NextRequest) {
  */
 export async function POST(req: NextRequest) {
   if (!isAuthed(req)) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  if (!isAdmin(req)) return NextResponse.json({ error: "viewer access is read-only" }, { status: 403 });
 
   const db = supabaseAdmin();
   try {
@@ -92,7 +94,9 @@ export async function POST(req: NextRequest) {
 
     if (typeof body.cutoff === "string") {
       await setCutoff(db, body.cutoff);
+      await logAudit(req, "cutoff_change", body.cutoff);
     } else if (typeof body.campaign_id === "string") {
+      await logAudit(req, "campaign_pin", body.campaign_id, { enabled: body.enabled, name: body.name ?? null });
       if (body.enabled === null) {
         await clearOverride(db, body.campaign_id);
       } else if (typeof body.enabled === "boolean") {
