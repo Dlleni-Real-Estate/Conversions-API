@@ -109,6 +109,58 @@ export async function listAdAccounts(tokenOverride?: string): Promise<
   }));
 }
 
+/**
+ * The Businesses this token was actually granted, from /me/businesses.
+ *
+ * This is the reliable grouping signal. The business field on /me/adaccounts
+ * often comes back EMPTY under Facebook's granular consent, which flattened
+ * the whole picker into one "personal" pile - a real bug seen live. The
+ * granted Businesses themselves always list.
+ */
+export async function grantedBusinesses(tokenOverride?: string): Promise<{ id: string; name?: string }[]> {
+  const token = tokenOverride || metaConfig().token;
+  try {
+    const json = await graph<{ data?: { id: string; name?: string }[] }>(
+      "/me/businesses",
+      { fields: "id,name", limit: "100" },
+      token
+    );
+    return json.data ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/** Ad account ids a Business owns or manages for clients. */
+export async function businessAccountIds(businessId: string, tokenOverride?: string): Promise<string[]> {
+  const token = tokenOverride || metaConfig().token;
+  const out = new Set<string>();
+  for (const edge of ["owned_ad_accounts", "client_ad_accounts"]) {
+    try {
+      const json = await graph<{ data?: { account_id?: string }[] }>(
+        `/${businessId}/${edge}`,
+        { fields: "account_id", limit: "200" },
+        token
+      );
+      for (const a of json.data ?? []) if (a.account_id) out.add(a.account_id);
+    } catch {
+      // An edge this token cannot read contributes nothing - not an error.
+    }
+  }
+  return [...out];
+}
+
+/** Who actually signed in - shown so a wrong account is caught by eye. */
+export async function tokenOwnerName(tokenOverride?: string): Promise<string | null> {
+  const token = tokenOverride || metaConfig().token;
+  try {
+    const json = await graph<{ name?: string }>("/me", { fields: "name" }, token);
+    return json.name ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /** Which Business owns this ad account, from the account itself. */
 export async function accountBusiness(
   adAccountId: string,

@@ -56,6 +56,8 @@ export default function AdAccounts({ pw }: { pw: string }) {
     datasets: Record<string, Ref[]>;
     pages: Record<string, Ref[]>;
     pageSource: Record<string, string>;
+    signedInAs?: string | null;
+    businesses?: Ref[];
   };
   const [probeToken, setProbeToken] = useState("");
   const [probing, setProbing] = useState(false);
@@ -117,6 +119,8 @@ export default function AdAccounts({ pw }: { pw: string }) {
             datasets: j.datasets ?? {},
             pages: j.pages ?? {},
             pageSource: j.pageSource ?? {},
+            signedInAs: j.signedInAs ?? null,
+            businesses: j.businesses ?? [],
           });
           setProbeAuth(auth);
         } else {
@@ -258,7 +262,12 @@ export default function AdAccounts({ pw }: { pw: string }) {
     const src = probe.pageSource?.[a.id] ?? "none";
     const blocked = sets.length === 0;
     const chosen = picked[a.id] ?? sets[0]?.id ?? "";
-    const chosenPage = pickedPage[a.id] ?? pages[0]?.id ?? "";
+    // No silent default among many Pages. Alphabetical-first is how the wrong
+    // Page gets connected and reads zero leads forever - live, the picker sat
+    // on "AR Elite Properties" purely because A sorts first. One candidate
+    // picks itself; more than one demands a hand on the picker.
+    const chosenPage = pickedPage[a.id] ?? (pages.length === 1 ? pages[0].id : "");
+    const needsPage = pages.length > 1 && !chosenPage;
     return (
       <Card key={a.id} className="flex flex-wrap items-center justify-between gap-3 p-4">
         <div className="min-w-0">
@@ -297,8 +306,11 @@ export default function AdAccounts({ pw }: { pw: string }) {
               value={chosenPage}
               onChange={(e) => setPickedPage((p) => ({ ...p, [a.id]: e.target.value }))}
               aria-label={t.accPage}
-              className="tap rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs shadow-card"
+              className={`tap rounded-lg border bg-white px-2.5 py-1.5 text-xs shadow-card ${
+                needsPage ? "border-amber-400" : "border-slate-300"
+              }`}
             >
+              <option value="">{t.accPickPage}</option>
               {pages.map((d) => (
                 <option key={d.id} value={d.id}>{d.name || d.id}</option>
               ))}
@@ -306,7 +318,7 @@ export default function AdAccounts({ pw }: { pw: string }) {
           )}
           <button
             onClick={() => connectProbed(a, chosen, chosenPage)}
-            disabled={blocked || busy === a.id}
+            disabled={blocked || needsPage || busy === a.id}
             className="tap rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-medium text-white shadow-card hover:bg-brand-700 disabled:opacity-40"
           >
             {busy === a.id ? t.accConnecting : t.accConnect}
@@ -517,6 +529,20 @@ export default function AdAccounts({ pw }: { pw: string }) {
           </>
         )}
         {probeErr && <p className="mt-2 text-[11px] text-red-600">{probeErr}</p>}
+        {probe && (
+          <p className="mt-3 text-[11px] leading-relaxed text-slate-500">
+            {t.accSignedIn}: <span dir="auto" className="font-medium text-slate-700">{probe.signedInAs || "\u2014"}</span>
+            {" \u00b7 "}
+            {t.accGrantedBiz}:{" "}
+            {probe.businesses && probe.businesses.length > 0 ? (
+              <span dir="auto" className="font-medium text-slate-700">
+                {probe.businesses.map((b) => b.name || b.id).join(" \u00b7 ")}
+              </span>
+            ) : (
+              <span className="text-amber-700">{t.accNoBizGranted}</span>
+            )}
+          </p>
+        )}
         {probe && probe.available.length === 0 && (
           <p className="mt-3 text-[11px] text-slate-500">{t.accProbeNone}</p>
         )}
@@ -531,7 +557,10 @@ export default function AdAccounts({ pw }: { pw: string }) {
             arr.push(a);
             groups.set(k, arr);
           }
-          return [...groups.entries()].map(([biz, accs]) => (
+          const ordered = [...groups.entries()].sort((x, y) =>
+            x[0] === "" ? 1 : y[0] === "" ? -1 : x[0].localeCompare(y[0])
+          );
+          return ordered.map(([biz, accs]) => (
             <div key={biz || "_none"} className="mt-3">
               {groups.size > 1 && (
                 <p dir="auto" className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">

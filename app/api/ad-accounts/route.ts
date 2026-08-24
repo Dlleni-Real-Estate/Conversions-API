@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 import { isAuthed } from "@/lib/auth";
-import { accountBusiness, datasetsForAccount, listAdAccounts, pagesForAccount, verifyPairing } from "@/lib/meta";
+import {
+  accountBusiness, businessAccountIds, datasetsForAccount, grantedBusinesses,
+  listAdAccounts, pagesForAccount, tokenOwnerName, verifyPairing,
+} from "@/lib/meta";
 import { tokenExpiry, tokenForNonce } from "@/lib/oauth";
 
 export const dynamic = "force-dynamic";
@@ -120,7 +123,31 @@ export async function POST(req: NextRequest) {
           pageSource[a.id] = p.source;
         })
       );
-      return NextResponse.json({ ok: true, probe: true, available, datasets, pages, pageSource });
+      // Stamp each row's Business from the granted-Business side, because the
+      // business field on the account list is unreliable under granular
+      // consent - live, it came back empty for every row and the whole picker
+      // collapsed into "personal".
+      const [signedInAs, businesses] = await Promise.all([
+        tokenOwnerName(probeToken),
+        grantedBusinesses(probeToken),
+      ]);
+      const bizOf = new Map<string, { id: string; name?: string }>();
+      await Promise.all(
+        businesses.map(async (b) => {
+          for (const id of await businessAccountIds(b.id, probeToken)) bizOf.set(id, b);
+        })
+      );
+      for (const a of available) {
+        if (!a.business_id && bizOf.has(a.id)) {
+          const b = bizOf.get(a.id)!;
+          a.business_id = b.id;
+          a.business_name = b.name;
+        }
+      }
+
+      return NextResponse.json({
+        ok: true, probe: true, available, datasets, pages, pageSource, signedInAs, businesses,
+      });
     } catch (err) {
       return NextResponse.json(
         { ok: false, error: err instanceof Error ? err.message : String(err) },
@@ -215,13 +242,26 @@ export async function POST(req: NextRequest) {
   // Business name on the row is what tells two same-named campaigns apart on
   // every screen after this one.
   const biz = await accountBusiness(accountId, ownToken ?? undefined);
+  let bizId = biz.id ?? null;
+  let bizName = biz.name ?? null;
+  if (!bizId && ownToken) {
+    // Same consent quirk as the picker: the account object may hide its
+    // Business while the granted-Business side still names it.
+    for (const b of await grantedBusinesses(ownToken)) {
+      if ((await businessAccountIds(b.id, ownToken)).includes(accountId)) {
+        bizId = b.id;
+        bizName = b.name ?? null;
+        break;
+      }
+    }
+  }
 
   const { error } = await db.from("ad_accounts").upsert(
     {
       ad_account_id: accountId,
       name: body?.name ?? null,
-      business_id: biz.id ?? null,
-      business_name: biz.name ?? null,
+      business_id: bizId,
+      business_name: bizName,
       dataset_id: datasetId,
       dataset_name: check.datasetName ?? null,
       page_id: pageId || null,

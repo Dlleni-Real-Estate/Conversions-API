@@ -69,6 +69,10 @@ export const DICT = {
     accProbing: "Checking\u2026",
     accProbeNone: "This token sees no connectable ad account. Assign the ad account (and its dataset) to the token's system user in that Business, then check again.",
     accOwnToken: "own token",
+    accSignedIn: "Signed in as",
+    accGrantedBiz: "Businesses granted",
+    accNoBizGranted: "none \u2014 sign in again and approve the Businesses you want listed here",
+    accPickPage: "\u2014 choose the Page \u2014",
     accFbLogin: "Connect with Facebook",
     accFbLoginSub:
       "The fast path: sign in with the Facebook account that manages your Businesses, approve once, and every ad account it manages \u2014 across ALL its Businesses \u2014 appears here grouped by Business, ready to connect. Sign in again any time to add another or renew one. The sign-in lives on this server only \u2014 never shown, never in a URL. Tokens from this path last ~60 days; the health card warns two weeks before one lapses, and renewing is the same two clicks.",
@@ -311,6 +315,10 @@ export const DICT = {
     accProbing: "بيفحص\u2026",
     accProbeNone: "التوكن ده مش شايف أي حساب إعلانات ينفع يتربط. عيّن حساب الإعلانات (والداتاسِت بتاعه) للـsystem user بتاع التوكن في الـBusiness ده، وافحص تاني.",
     accOwnToken: "توكن خاص",
+    accSignedIn: "داخل بحساب",
+    accGrantedBiz: "الـBusinesses الممنوحة",
+    accNoBizGranted: "ولا واحد \u2014 سجّل تاني ووافق على الـBusinesses اللي عايزها تظهر هنا",
+    accPickPage: "\u2014 اختار الصفحة \u2014",
     accFbLogin: "اربط بحساب فيسبوك",
     accFbLoginSub:
       "الطريقة السريعة: سجّل دخول بحساب الفيسبوك اللي بيدير الـBusinesses بتاعتك، اعمل موافقة مرة واحدة، وكل الحسابات الإعلانية اللي بيديرها \u2014 من كل الـBusinesses \u2014 هتظهر هنا متقسمة بالـBusiness وجاهزة للربط. وتقدر تسجّل دخول تاني في أي وقت تضيف Business جديد أو تجدد واحد قديم. تسجيل الدخول بيتخزن على السيرفر بس \u2014 مش بيظهر ولا بيعدي في أي لينك. التوكن بيعيش حوالي 60 يوم؛ كارت الصحة بينبّهك قبل ما يخلص بأسبوعين، والتجديد هو نفس الضغطتين.",
