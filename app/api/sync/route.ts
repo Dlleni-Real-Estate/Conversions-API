@@ -11,7 +11,7 @@ import {
   normalizeEgyptPhone,
   type AccountScope,
 } from "@/lib/meta";
-import { activeAccounts, datasetIndex } from "@/lib/accounts";
+import { activeAccounts, scopeIndex } from "@/lib/accounts";
 import { resolveCampaigns } from "@/lib/tracking";
 import { supabaseAdmin } from "@/lib/supabase";
 import { isAuthed } from "@/lib/auth";
@@ -464,7 +464,7 @@ async function sendMissingStageEvents(
   // to the account that produced it. One dataset for everything would be
   // accepted by Meta and attributed to nothing for every account but one.
   const { scopes } = await activeAccounts(db);
-  const datasetOf = datasetIndex(scopes);
+  const scopeIdx = scopeIndex(scopes);
 
   const groups = new Map<string, typeof missing>();
   const withheld: string[] = [];
@@ -479,8 +479,8 @@ async function sendMissingStageEvents(
       continue;
     }
 
-    const dataset = datasetOf.get(ev.adAccountId);
-    if (!dataset) {
+    const route = scopeIdx.get(ev.adAccountId);
+    if (!route) {
       // The lead's account is disconnected, paused, or unverified. Sending
       // anyway means sending to SOME OTHER account's dataset - accepted with a
       // 200, attributed to nothing, and invisible. Held instead, and named.
@@ -488,9 +488,9 @@ async function sendMissingStageEvents(
       continue;
     }
 
-    const bucket = groups.get(dataset) ?? [];
+    const bucket = groups.get(ev.adAccountId) ?? [];
     bucket.push(ev);
-    groups.set(dataset, bucket);
+    groups.set(ev.adAccountId, bucket);
   }
 
   if (withheld.length > 0) {
@@ -501,14 +501,17 @@ async function sendMissingStageEvents(
   }
 
   let sent = 0, attempted = 0, failed = 0;
-  for (const [datasetId, batch] of groups) {
-    const result = await sendLeadEvents(batch, 100, datasetId || undefined).catch((err) => {
+  for (const [accountId, batch] of groups) {
+    // Dataset and token come from the SAME row: the pairing Meta verified.
+    const route = accountId ? scopeIdx.get(accountId) : undefined;
+    const result = await sendLeadEvents(batch, 100, route?.datasetId, route?.token).catch((err) => {
       console.error("[sync] stage events failed", err);
       return { attempted: 0, sent: 0, failed: batch.length };
     });
     attempted += result.attempted; sent += result.sent; failed += result.failed;
     console.log(
-      `[sync] stage events dataset=${datasetId || "(env default)"} ` +
+      `[sync] stage events account=${accountId || "(env default)"} ` +
+        `dataset=${route?.datasetId || "(env default)"} ` +
         `attempted=${result.attempted} sent=${result.sent} failed=${result.failed}`
     );
   }

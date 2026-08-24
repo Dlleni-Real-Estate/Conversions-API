@@ -3,6 +3,7 @@ import { supabaseAdmin } from "@/lib/supabase";
 import { isAuthed } from "@/lib/auth";
 import { chainFor, isStatus, STAGE_BY_STATUS, type Status } from "@/lib/stages";
 import { sendLeadEvents } from "@/lib/capi";
+import { activeAccounts } from "@/lib/accounts";
 import { APP_SENDS_EVENTS, SENDER } from "@/lib/sender";
 
 export const dynamic = "force-dynamic";
@@ -51,7 +52,7 @@ export async function POST(req: NextRequest) {
       status_at: new Date().toISOString(),
     })
     .eq("lead_id", body.lead_id)
-    .select("lead_id, phone, email, deal_value, status")
+    .select("lead_id, phone, email, deal_value, status, ad_account_id")
     .single();
 
   if (error || !lead) {
@@ -84,6 +85,25 @@ export async function POST(req: NextRequest) {
   // deterministic, so Meta discards the repeat instead of counting it twice.
   const chain = chainFor(status as Status);
 
+  // Route through the account that produced this lead. If that account is
+  // disconnected, paused or unverified, refuse rather than fall back to some
+  // other account's dataset - Meta accepts that with a 200 and attributes it
+  // to nothing, which cannot be caught after the fact.
+  const { scopes } = await activeAccounts(db);
+  const scope = lead.ad_account_id
+    ? scopes.find((s) => s.adAccountId === lead.ad_account_id)
+    : undefined;
+  if (lead.ad_account_id && !scope) {
+    return NextResponse.json(
+      {
+        error:
+          `ad account ${lead.ad_account_id} is not active (disconnected, paused, or unverified) - ` +
+          `reconnect it in Settings before sending feedback for its leads`,
+      },
+      { status: 409 }
+    );
+  }
+
   // Ordered timestamps ending now, so the sequence Meta reads is the sequence
   // the lead actually walked, and every one of them sits after the lead's
   // creation time (Meta discards an event stamped before its lead existed).
@@ -96,7 +116,10 @@ export async function POST(req: NextRequest) {
       phone: lead.phone ?? undefined,
       email: lead.email ?? undefined,
       value: st.status === "reservation" ? (body.deal_value ?? lead.deal_value ?? null) : null,
-    }))
+    })),
+    100,
+    scope?.datasetId,
+    scope?.token
   );
 
   return NextResponse.json({

@@ -13,6 +13,8 @@ type Connected = {
   enabled: boolean;
   verified_at: string | null;
   last_error: string | null;
+  /** True when the row carries its own token (an account from another Business). */
+  has_own_token?: boolean;
 };
 type Available = { id: string; name?: string; currency?: string; status?: number };
 type Ref = { id: string; name?: string };
@@ -44,6 +46,18 @@ export default function AdAccounts({ pw }: { pw: string }) {
   const [picked, setPicked] = useState<Record<string, string>>({});
   const [pickedPage, setPickedPage] = useState<Record<string, string>>({});
 
+  // "Connect from another Business": what one pasted token can see.
+  type Probe = {
+    available: Available[];
+    datasets: Record<string, Ref[]>;
+    pages: Record<string, Ref[]>;
+    pageSource: Record<string, string>;
+  };
+  const [probeToken, setProbeToken] = useState("");
+  const [probing, setProbing] = useState(false);
+  const [probe, setProbe] = useState<Probe | null>(null);
+  const [probeErr, setProbeErr] = useState<string | null>(null);
+
   const load = useCallback(async () => {
     try {
       const r = await fetch("/api/ad-accounts", { headers: { "x-app-password": pw } });
@@ -74,6 +88,133 @@ export default function AdAccounts({ pw }: { pw: string }) {
   const connectedIds = new Set(data.connected.map((c) => c.ad_account_id));
   const notConnected = data.available.filter((a) => !connectedIds.has(a.id));
 
+  const runProbe = async () => {
+    setProbing(true);
+    setProbeErr(null);
+    try {
+      const r = await fetch("/api/ad-accounts", {
+        method: "POST",
+        headers: { "x-app-password": pw, "Content-Type": "application/json" },
+        body: JSON.stringify({ probe_token: probeToken.trim() }),
+      });
+      const j = await r.json();
+      if (j.ok) {
+        setProbe({
+          available: j.available ?? [],
+          datasets: j.datasets ?? {},
+          pages: j.pages ?? {},
+          pageSource: j.pageSource ?? {},
+        });
+      } else {
+        setProbe(null);
+        setProbeErr(j.error || "Error");
+      }
+    } catch {
+      setProbeErr(t.connectionError);
+    } finally {
+      setProbing(false);
+    }
+  };
+
+  const connectProbed = async (a: Available, dataset: string, page: string) => {
+    if (!dataset) return;
+    setBusy(a.id);
+    setErr(null);
+    try {
+      const r = await fetch("/api/ad-accounts", {
+        method: "POST",
+        headers: { "x-app-password": pw, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ad_account_id: a.id,
+          dataset_id: dataset,
+          name: a.name,
+          // The token that listed and verified this account is the token
+          // stored with it - one token per pairing, end to end.
+          access_token: probeToken.trim(),
+          ...(page ? { page_id: page } : {}),
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) {
+        setErr(j.error || "Error");
+        return;
+      }
+      setProbe((p) => (p ? { ...p, available: p.available.filter((x) => x.id !== a.id) } : p));
+      await load();
+    } catch {
+      setErr(t.connectionError);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // Mirrors the env-token candidate card below; kept separate because its
+  // pickers read from the probe result and its connect carries the token.
+  const probeCard = (a: Available) => {
+    if (!probe) return null;
+    const sets = probe.datasets[a.id] ?? [];
+    const pages = probe.pages?.[a.id] ?? [];
+    const src = probe.pageSource?.[a.id] ?? "none";
+    const blocked = sets.length === 0;
+    const chosen = picked[a.id] ?? sets[0]?.id ?? "";
+    const chosenPage = pickedPage[a.id] ?? pages[0]?.id ?? "";
+    return (
+      <Card key={a.id} className="flex flex-wrap items-center justify-between gap-3 p-4">
+        <div className="min-w-0">
+          <p dir="auto" className="truncate font-medium text-slate-800">{a.name || a.id}</p>
+          <p className="mt-0.5 text-[11px] text-slate-500">
+            <span className="ltr-nums">{a.id}</span>
+            {a.currency ? ` · ${a.currency}` : ""}
+          </p>
+          {blocked && (
+            <p className="mt-1.5 max-w-xl rounded-lg border border-amber-200 bg-amber-50 p-2 text-[11px] leading-relaxed text-amber-800">
+              {t.accNoDataset}
+            </p>
+          )}
+          {!blocked && src === "user" && (
+            <p className="mt-1.5 max-w-xl rounded-lg border border-slate-200 bg-slate-50 p-2 text-[11px] leading-relaxed text-slate-600">
+              {t.accPageUnassigned}
+            </p>
+          )}
+        </div>
+
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          {sets.length > 1 && (
+            <select
+              value={chosen}
+              onChange={(e) => setPicked((p) => ({ ...p, [a.id]: e.target.value }))}
+              aria-label={t.accDataset}
+              className="tap rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs shadow-card"
+            >
+              {sets.map((d) => (
+                <option key={d.id} value={d.id}>{d.name || d.id}</option>
+              ))}
+            </select>
+          )}
+          {pages.length > 1 && (
+            <select
+              value={chosenPage}
+              onChange={(e) => setPickedPage((p) => ({ ...p, [a.id]: e.target.value }))}
+              aria-label={t.accPage}
+              className="tap rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs shadow-card"
+            >
+              {pages.map((d) => (
+                <option key={d.id} value={d.id}>{d.name || d.id}</option>
+              ))}
+            </select>
+          )}
+          <button
+            onClick={() => connectProbed(a, chosen, chosenPage)}
+            disabled={blocked || busy === a.id}
+            className="tap rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-medium text-white shadow-card hover:bg-brand-700 disabled:opacity-40"
+          >
+            {busy === a.id ? t.accConnecting : t.accConnect}
+          </button>
+        </div>
+      </Card>
+    );
+  };
+
   return (
     <section>
       <SectionTitle title={t.accountsTitle} subtitle={t.accountsSub} />
@@ -96,6 +237,11 @@ export default function AdAccounts({ pw }: { pw: string }) {
                 {!c.verified_at && (
                   <span className="ms-2 rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
                     {t.accUnverified}
+                  </span>
+                )}
+                {c.has_own_token && (
+                  <span className="ms-2 rounded-full border border-slate-300 bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
+                    {t.accOwnToken}
                   </span>
                 )}
               </p>
@@ -218,6 +364,38 @@ export default function AdAccounts({ pw }: { pw: string }) {
           </div>
         </>
       )}
+
+      <p className="mb-2 mt-6 text-xs font-medium text-slate-500">{t.accOtherBiz}</p>
+      <Card className="p-4">
+        <p className="max-w-2xl text-[11px] leading-relaxed text-slate-500">{t.accOtherBizHelp}</p>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <input
+            type="password"
+            dir="ltr"
+            value={probeToken}
+            onChange={(e) => setProbeToken(e.target.value)}
+            placeholder={t.accTokenPh}
+            autoComplete="off"
+            className="tap w-80 max-w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs shadow-card"
+          />
+          <button
+            onClick={runProbe}
+            disabled={!probeToken.trim() || probing}
+            className="tap rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-medium text-white shadow-card hover:bg-brand-700 disabled:opacity-40"
+          >
+            {probing ? t.accProbing : t.accProbe}
+          </button>
+        </div>
+        {probeErr && <p className="mt-2 text-[11px] text-red-600">{probeErr}</p>}
+        {probe && probe.available.filter((a) => !connectedIds.has(a.id)).length === 0 && (
+          <p className="mt-3 text-[11px] text-slate-500">{t.accProbeNone}</p>
+        )}
+        {probe && (
+          <div className="mt-3 space-y-3">
+            {probe.available.filter((a) => !connectedIds.has(a.id)).map(probeCard)}
+          </div>
+        )}
+      </Card>
     </section>
   );
 }

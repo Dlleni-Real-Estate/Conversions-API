@@ -109,8 +109,13 @@ export type SendResult = { ok: true; response: unknown } | { ok: false; error: s
  * events_received: 1 while attributing nothing — the failure that has no
  * symptom. Callers pass the dataset the ad_accounts row was verified against.
  */
-async function postEvents(events: unknown[], datasetIdOverride?: string): Promise<SendResult> {
-  const { token, testEventCode } = metaConfig();
+async function postEvents(events: unknown[], datasetIdOverride?: string, tokenOverride?: string): Promise<SendResult> {
+  const { testEventCode } = metaConfig();
+  // The token must be the one that verified this dataset's pairing. A send to
+  // another Business's dataset with the wrong token either 401s (loud, fine)
+  // or - worse - succeeds against a dataset the token CAN see and attributes
+  // nothing. Callers pass both together, from the same ad_accounts row.
+  const token = tokenOverride || metaConfig().token;
   const datasetId = datasetIdOverride || metaConfig().datasetId;
 
   const body: Record<string, unknown> = { data: events };
@@ -139,7 +144,7 @@ async function postEvents(events: unknown[], datasetIdOverride?: string): Promis
  * is written BEFORE the network call, so a crash mid-flight leaves a 'pending'
  * row that /api/capi/replay will pick up rather than a silently lost event.
  */
-export async function sendLeadEvent(input: CapiInput, datasetId?: string): Promise<SendResult> {
+export async function sendLeadEvent(input: CapiInput, datasetId?: string, token?: string): Promise<SendResult> {
   const db = supabaseAdmin();
   const event = buildEvent(input);
   const eventTime = new Date((event.event_time as number) * 1000).toISOString();
@@ -160,7 +165,7 @@ export async function sendLeadEvent(input: CapiInput, datasetId?: string): Promi
     .select("id, attempts")
     .single();
 
-  const result = await postEvents([event], datasetId);
+  const result = await postEvents([event], datasetId, token);
 
   if (row?.id) {
     await db
@@ -186,7 +191,7 @@ export async function sendLeadEvent(input: CapiInput, datasetId?: string): Promi
  * Used for the raw-lead stage, where a backfill can mean hundreds of events and
  * one-at-a-time would time the function out.
  */
-export async function sendLeadEvents(inputs: CapiInput[], chunkSize = 100, datasetId?: string) {
+export async function sendLeadEvents(inputs: CapiInput[], chunkSize = 100, datasetId?: string, token?: string) {
   if (inputs.length === 0) return { attempted: 0, sent: 0, failed: 0 };
   const db = supabaseAdmin();
   let sent = 0;
@@ -210,7 +215,7 @@ export async function sendLeadEvents(inputs: CapiInput[], chunkSize = 100, datas
       { onConflict: "event_id" }
     );
 
-    const result = await postEvents(events, datasetId);
+    const result = await postEvents(events, datasetId, token);
     const patch = {
       status: result.ok ? "sent" : "failed",
       response: "response" in result ? (result.response as object) : null,
@@ -234,22 +239,73 @@ export async function sendLeadEvents(inputs: CapiInput[], chunkSize = 100, datas
   return { attempted: inputs.length, sent, failed };
 }
 
-/** Retry anything left pending/failed. Called by the hourly cron. */
+/**
+ * Retry anything left pending/failed. Called by the hourly cron.
+ *
+ * Each event is replayed into the dataset of the account that produced its
+ * lead, with that account's token. Replaying everything into the deployment
+ * default was correct with one account and silently wrong with two: a retried
+ * event from account B would land in account A's dataset, be accepted with a
+ * 200, and attribute nothing. An event whose account is disconnected, paused
+ * or unverified is left alone (not attempted, not counted as failed) until the
+ * account is active again.
+ */
 export async function replayFailed(limit = 100) {
   const db = supabaseAdmin();
   const { data: rows } = await db
     .from("capi_events")
-    .select("id, payload, attempts")
+    .select("id, payload, attempts, lead_id")
     .in("status", ["pending", "failed"])
     .lt("attempts", 6)
     .order("created_at", { ascending: true })
     .limit(limit);
 
+  // lead -> ad account. Null account means "before the accounts table" and
+  // routes to the deployment default, which is the only place it can be from.
+  const leadIds = [...new Set((rows ?? []).map((r) => r.lead_id).filter(Boolean))];
+  const accountOf = new Map<string, string>();
+  if (leadIds.length > 0) {
+    const { data: leadRows } = await db
+      .from("leads")
+      .select("lead_id, ad_account_id")
+      .in("lead_id", leadIds);
+    for (const l of leadRows ?? []) {
+      if (l.ad_account_id) accountOf.set(l.lead_id as string, l.ad_account_id as string);
+    }
+  }
+
+  // Only rows Meta has actually vouched for may receive events.
+  const { data: accRows } = await db
+    .from("ad_accounts")
+    .select("ad_account_id, dataset_id, access_token, enabled, verified_at");
+  const routeOf = new Map(
+    (accRows ?? [])
+      .filter((a) => a.enabled && a.verified_at)
+      .map((a) => [
+        a.ad_account_id as string,
+        { datasetId: a.dataset_id as string, token: (a.access_token as string | null) ?? undefined },
+      ])
+  );
+
   let sent = 0;
   let failed = 0;
+  let held = 0;
 
   for (const row of rows || []) {
-    const result = await postEvents([row.payload]);
+    const account = accountOf.get(row.lead_id as string);
+    let datasetId: string | undefined;
+    let token: string | undefined;
+    if (account) {
+      const route = routeOf.get(account);
+      if (!route) {
+        held++;
+        continue;
+      }
+      datasetId = route.datasetId;
+      token = route.token;
+    }
+
+    const result = await postEvents([row.payload], datasetId, token);
     if (result.ok) sent++;
     else failed++;
     await db
@@ -264,5 +320,6 @@ export async function replayFailed(limit = 100) {
       .eq("id", row.id);
   }
 
-  return { considered: rows?.length ?? 0, sent, failed };
+  if (held > 0) console.warn(`[capi] replay held ${held} event(s) whose ad account is not active`);
+  return { considered: rows?.length ?? 0, sent, failed, held };
 }

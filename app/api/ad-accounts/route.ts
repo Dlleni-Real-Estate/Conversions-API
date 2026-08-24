@@ -26,8 +26,15 @@ export async function GET(req: NextRequest) {
   if (!isAuthed(req)) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const db = supabaseAdmin();
 
-  const { data: connected } = await db
+  const { data: connectedRaw } = await db
     .from("ad_accounts").select("*").order("created_at", { ascending: true });
+
+  // The stored token never leaves the server. The UI only needs to know that
+  // one exists, so the row is replaced by has_own_token before it is returned.
+  const connected = (connectedRaw ?? []).map((r) => {
+    const { access_token, ...rest } = r as { access_token?: string | null } & Record<string, unknown>;
+    return { ...rest, has_own_token: Boolean(access_token) };
+  });
 
   let available: { id: string; name?: string; currency?: string; status?: number }[] = [];
   let listError: string | null = null;
@@ -59,7 +66,7 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json({
     ok: true,
-    connected: connected ?? [],
+    connected,
     available,
     datasets,
     pages,
@@ -74,7 +81,40 @@ export async function POST(req: NextRequest) {
   const db = supabaseAdmin();
   const body = (await req.json().catch(() => null)) as {
     ad_account_id?: string; dataset_id?: string; page_id?: string; name?: string; enabled?: boolean;
+    access_token?: string; probe_token?: string;
   } | null;
+
+  // Probe: "what can THIS token see?" - for connecting an account that lives
+  // in another Business, whose assets the deployment token cannot list. The
+  // token is used for the three read calls and returned to no one.
+  const probeToken = (body?.probe_token || "").trim();
+  if (probeToken) {
+    try {
+      const available = await listAdAccounts(probeToken);
+      const datasets: Record<string, { id: string; name?: string }[]> = {};
+      const pages: Record<string, { id: string; name?: string }[]> = {};
+      const pageSource: Record<string, string> = {};
+      await Promise.all(
+        available.map(async (a) => {
+          const [d, p] = await Promise.all([
+            datasetsForAccount(a.id, probeToken).catch(() => []),
+            pagesForAccount(a.id, probeToken).catch(
+              () => ({ pages: [] as { id: string; name?: string }[], source: "none" as const })
+            ),
+          ]);
+          datasets[a.id] = d;
+          pages[a.id] = p.pages;
+          pageSource[a.id] = p.source;
+        })
+      );
+      return NextResponse.json({ ok: true, probe: true, available, datasets, pages, pageSource });
+    } catch (err) {
+      return NextResponse.json(
+        { ok: false, error: err instanceof Error ? err.message : String(err) },
+        { status: 400 }
+      );
+    }
+  }
 
   const accountId = (body?.ad_account_id || "").replace(/^act_/, "").trim();
   if (!accountId) return NextResponse.json({ error: "ad_account_id is required" }, { status: 400 });
@@ -89,7 +129,13 @@ export async function POST(req: NextRequest) {
   const datasetId = (body?.dataset_id || "").trim();
   if (!datasetId) return NextResponse.json({ error: "dataset_id is required" }, { status: 400 });
 
-  const check = await verifyPairing(accountId, datasetId).catch((err) => ({
+  // An account from another Business carries its own token, and THAT token is
+  // the one the pairing is verified with - the same one every later call for
+  // this account will use. Verifying with one token and sending with another
+  // would re-open the exact hole verification exists to close.
+  const ownToken = (body?.access_token || "").trim() || null;
+
+  const check = await verifyPairing(accountId, datasetId, ownToken ?? undefined).catch((err) => ({
     ok: false as const, error: err instanceof Error ? err.message : String(err), available: [],
   }));
 
@@ -105,11 +151,29 @@ export async function POST(req: NextRequest) {
   // forever without ever reporting an error.
   let pageId = (body?.page_id || "").trim();
   if (!pageId) {
-    const p = await pagesForAccount(accountId).catch(
+    const p = await pagesForAccount(accountId, ownToken ?? undefined).catch(
       () => ({ pages: [] as { id: string; name?: string }[], source: "none" as const })
     );
     if (p.pages.length === 1) pageId = p.pages[0].id;
-    else if (p.pages.length === 0) pageId = process.env.META_PAGE_ID || "";
+    else if (p.pages.length === 0) {
+      if (ownToken) {
+        // The env Page belongs to the env token's Business; an own-token
+        // account can never read leads through it. No candidates means the
+        // token was not granted the Page, and that has to be fixed, not
+        // papered over.
+        return NextResponse.json(
+          {
+            ok: false,
+            error:
+              `The provided token cannot see any Page. In that Business, assign the Page that owns ` +
+              `this account's lead forms to the token's system user (with pages_show_list + ` +
+              `pages_manage_ads + leads_retrieval), then connect again.`,
+          },
+          { status: 400 }
+        );
+      }
+      pageId = process.env.META_PAGE_ID || "";
+    }
     else {
       // More than one candidate and no instruction. Picking one here would be
       // a guess that reads zero leads and reports nothing, so it is refused
@@ -139,6 +203,9 @@ export async function POST(req: NextRequest) {
       enabled: body?.enabled ?? true,
       verified_at: new Date().toISOString(),
       last_error: null,
+      // Only written when provided, so re-verifying an account later without
+      // re-pasting its token does not wipe the stored one.
+      ...(ownToken ? { access_token: ownToken } : {}),
     },
     { onConflict: "ad_account_id" }
   );

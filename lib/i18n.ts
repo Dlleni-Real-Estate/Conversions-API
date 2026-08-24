@@ -57,6 +57,14 @@ export const DICT = {
     accountsListFail: "Could not list ad accounts from Meta",
     accPage: "page",
     accPageUnassigned: "Meta ties no Page to this ad account, so the list below is your own Pages. Pick the one whose lead forms this account runs \u2014 the wrong one reads zero leads and reports no error.",
+    accOtherBiz: "Connect from another Business",
+    accOtherBizHelp:
+      "The main token only sees its own Business. For an ad account that lives in a different Meta Business, paste a token generated THERE (Business Settings \u2192 System users \u2192 generate token with ads_read, pages_show_list, pages_manage_ads, leads_retrieval \u2014 and assign the ad account, its Page and its dataset to that user). The token is stored with the connection, used only for this account's calls, and never shown again; disconnecting the account forgets it.",
+    accTokenPh: "Access token from the other Business",
+    accProbe: "Check token",
+    accProbing: "Checking\u2026",
+    accProbeNone: "This token sees no connectable ad account. Assign the ad account (and its dataset) to the token's system user in that Business, then check again.",
+    accOwnToken: "own token",
     mixedCurrency: (list: string) =>
       `Spend here comes from ad accounts in different currencies (${list}). The totals add the raw numbers, so read them per campaign rather than as one figure.`,
     campAccountFailed: (n: string) => `Could not read campaigns from ${n}`,
@@ -279,6 +287,14 @@ export const DICT = {
     accountsListFail: "معرفناش نجيب حسابات الإعلانات من ميتا",
     accPage: "صفحة",
     accPageUnassigned: "ميتا مش رابطة أي صفحة بحساب الإعلانات ده، فاللي تحت دي صفحاتك انت. اختار الصفحة اللي فورمات الليدز بتاعتها شغالة من الحساب ده — لو اخترت غلط مش هتيجي ولا ليد ومش هيظهر أي إيرور.",
+    accOtherBiz: "ربط من Business تاني",
+    accOtherBizHelp:
+      "التوكن الرئيسي بيشوف الـBusiness بتاعه بس. عشان حساب إعلانات في Meta Business تاني، حط هنا توكن متولّد هناك (Business Settings \u2190 System users \u2190 توكن بصلاحيات ads_read و pages_show_list و pages_manage_ads و leads_retrieval \u2014 ومتعيّن له حساب الإعلانات وصفحته والداتاسِت). التوكن بيتخزن مع الربط، بيستخدم لمكالمات الحساب ده بس، ومش بيظهر تاني \u2014 ولو فصلت الحساب بيتنسي معاه.",
+    accTokenPh: "توكن الـBusiness التاني",
+    accProbe: "افحص التوكن",
+    accProbing: "بيفحص\u2026",
+    accProbeNone: "التوكن ده مش شايف أي حساب إعلانات ينفع يتربط. عيّن حساب الإعلانات (والداتاسِت بتاعه) للـsystem user بتاع التوكن في الـBusiness ده، وافحص تاني.",
+    accOwnToken: "توكن خاص",
     mixedCurrency: (list: string) =>
       `المصروف هنا جاي من حسابات إعلانات بعملات مختلفة (${list}). الإجماليات بتجمع الأرقام زي ما هي، فاقراها لكل كمبين لوحدها مش كرقم واحد.`,
     campAccountFailed: (n: string) => `معرفناش نقرا كمبينات ${n}`,

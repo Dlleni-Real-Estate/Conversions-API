@@ -47,6 +47,14 @@ export type AccountScope = {
   datasetId: string;
   pageId: string;
   name?: string;
+  /**
+   * Token for every Meta call about this account. Unset means the deployment
+   * token. An account in ANOTHER Business needs its own: the deployment token
+   * cannot see that Business's assets at all, and worse, a CAPI send with the
+   * wrong token to the wrong dataset is accepted with a 200 and attributed to
+   * nothing. The token that verified the pairing is the token that sends.
+   */
+  token?: string;
 };
 
 /** The scope built from environment variables — the one the cron falls back to. */
@@ -64,8 +72,8 @@ export function envScope(): AccountScope {
  * means no dataset is assigned, so any events sent for this account would be
  * accepted and then attributed to nothing.
  */
-export async function datasetsForAccount(adAccountId: string): Promise<{ id: string; name?: string }[]> {
-  const { token } = metaConfig();
+export async function datasetsForAccount(adAccountId: string, tokenOverride?: string): Promise<{ id: string; name?: string }[]> {
+  const token = tokenOverride || metaConfig().token;
   const id = adAccountId.replace(/^act_/, "");
   const json = await graph<{ data?: { id: string; name?: string }[] }>(
     `/act_${id}/adspixels`,
@@ -76,10 +84,10 @@ export async function datasetsForAccount(adAccountId: string): Promise<{ id: str
 }
 
 /** Every ad account this token can see, for the connect screen's picker. */
-export async function listAdAccounts(): Promise<
+export async function listAdAccounts(tokenOverride?: string): Promise<
   { id: string; name?: string; currency?: string; status?: number }[]
 > {
-  const { token } = metaConfig();
+  const token = tokenOverride || metaConfig().token;
   const json = await graph<{ data?: { account_id: string; name?: string; currency?: string; account_status?: number }[] }>(
     "/me/adaccounts",
     { fields: "account_id,name,currency,account_status", limit: "100" },
@@ -114,8 +122,8 @@ export type AccountPages = {
   error?: string;
 };
 
-export async function pagesForAccount(adAccountId: string): Promise<AccountPages> {
-  const { token } = metaConfig();
+export async function pagesForAccount(adAccountId: string, tokenOverride?: string): Promise<AccountPages> {
+  const token = tokenOverride || metaConfig().token;
   const id = adAccountId.replace(/^act_/, "");
   let error: string | undefined;
 
@@ -152,9 +160,10 @@ export async function pagesForAccount(adAccountId: string): Promise<AccountPages
  */
 export async function verifyPairing(
   adAccountId: string,
-  datasetId: string
+  datasetId: string,
+  tokenOverride?: string
 ): Promise<{ ok: true; datasetName?: string } | { ok: false; error: string; available: { id: string; name?: string }[] }> {
-  const available = await datasetsForAccount(adAccountId);
+  const available = await datasetsForAccount(adAccountId, tokenOverride);
   const match = available.find((d) => d.id === datasetId);
   if (match) return { ok: true, datasetName: match.name };
   return {
@@ -204,9 +213,13 @@ async function graph<T>(path: string, params: Record<string, string>, token: str
 const pageTokenCache = new Map<string, string>();
 
 export async function getPageToken(scope?: AccountScope): Promise<string> {
-  const { token } = metaConfig();
+  const token = scope?.token || metaConfig().token;
   const pageId = scope?.pageId || metaConfig().pageId;
-  const cached = pageTokenCache.get(pageId);
+  // Keyed by page AND token: the same Page id asked about with two different
+  // tokens is two different questions, and the wrong cached answer would be
+  // a page token the other Business never granted.
+  const cacheKey = `${pageId}|${token.slice(-8)}`;
+  const cached = pageTokenCache.get(cacheKey);
   if (cached) return cached;
 
   const data = await graph<{ access_token?: string }>(`/${pageId}`, { fields: "access_token" }, token);
@@ -216,7 +229,7 @@ export async function getPageToken(scope?: AccountScope): Promise<string> {
         `System User with Full control, and make sure the token has pages_show_list + pages_manage_ads.`
     );
   }
-  pageTokenCache.set(pageId, data.access_token);
+  pageTokenCache.set(cacheKey, data.access_token);
   return data.access_token;
 }
 
@@ -372,7 +385,7 @@ export type Campaign = {
 };
 
 export async function listCampaigns(scope?: AccountScope): Promise<Campaign[]> {
-  const { token } = metaConfig();
+  const token = scope?.token || metaConfig().token;
   const adAccountId = scope?.adAccountId || metaConfig().adAccountId;
   const out: Campaign[] = [];
   let after: string | undefined;
@@ -403,8 +416,8 @@ export type CampaignAd = { id: string; name: string; adset_id?: string; adset_na
  * that only ever belonged to a deleted ad will not be picked up — acceptable,
  * since a deleted ad is not a campaign anyone is still optimising.
  */
-export async function listCampaignAds(campaignId: string, _scope?: AccountScope): Promise<CampaignAd[]> {
-  const { token } = metaConfig();
+export async function listCampaignAds(campaignId: string, scope?: AccountScope): Promise<CampaignAd[]> {
+  const token = scope?.token || metaConfig().token;
   const out: CampaignAd[] = [];
   let after: string | undefined;
 
@@ -468,7 +481,7 @@ export async function fetchAdLeads(adId: string, since?: number, scope?: Account
 const timezoneCache = new Map<string, string>();
 
 async function accountTimezone(scope?: AccountScope): Promise<string> {
-  const { token } = metaConfig();
+  const token = scope?.token || metaConfig().token;
   const adAccountId = scope?.adAccountId || metaConfig().adAccountId;
   const hit = timezoneCache.get(adAccountId);
   if (hit) return hit;
@@ -605,7 +618,7 @@ export async function fetchCampaignInsights(
   createdTime?: string,
   scope?: AccountScope
 ): Promise<CampaignInsight | null> {
-  const { token } = metaConfig();
+  const token = scope?.token || metaConfig().token;
   const page: { data: InsightRow[] } = await graph(
     `/${campaignId}/insights`,
     {
@@ -647,7 +660,7 @@ export async function fetchCampaignAdInsights(
   createdTime?: string,
   scope?: AccountScope
 ): Promise<AdInsight[]> {
-  const { token } = metaConfig();
+  const token = scope?.token || metaConfig().token;
   const out: AdInsight[] = [];
   let after: string | undefined;
   const window = await insightsWindow(createdTime, scope);

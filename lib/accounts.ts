@@ -51,12 +51,14 @@ type Row = {
   page_id: string | null;
   enabled: boolean;
   verified_at: string | null;
+  /** Set for accounts in another Business; null means the deployment token. */
+  access_token: string | null;
 };
 
 export async function activeAccounts(db: DB): Promise<ActiveAccounts> {
   const { data, error } = await db
     .from("ad_accounts")
-    .select("ad_account_id,name,dataset_id,page_id,enabled,verified_at")
+    .select("ad_account_id,name,dataset_id,page_id,enabled,verified_at,access_token")
     .order("created_at", { ascending: true });
 
   // No table yet (migration not run) is the same situation as no rows: the
@@ -83,6 +85,7 @@ export async function activeAccounts(db: DB): Promise<ActiveAccounts> {
       datasetId: r.dataset_id,
       pageId: r.page_id || process.env.META_PAGE_ID || "",
       name: r.name ?? undefined,
+      token: r.access_token ?? undefined,
     });
   }
 
@@ -92,4 +95,9 @@ export async function activeAccounts(db: DB): Promise<ActiveAccounts> {
 /** ad_account_id -> dataset_id, for routing an event to the right dataset. */
 export function datasetIndex(scopes: AccountScope[]): Map<string, string> {
   return new Map(scopes.map((s) => [s.adAccountId, s.datasetId]));
+}
+
+/** ad_account_id -> full scope, when the caller needs dataset AND token. */
+export function scopeIndex(scopes: AccountScope[]): Map<string, AccountScope> {
+  return new Map(scopes.map((s) => [s.adAccountId, s]));
 }
