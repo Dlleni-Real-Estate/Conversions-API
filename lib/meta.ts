@@ -421,11 +421,38 @@ export async function getPageToken(scope?: AccountScope): Promise<string> {
   return data.access_token;
 }
 
+/**
+ * The token lead reads actually use.
+ *
+ * Meta accepts TWO credentials on the leads edges: the Page's own token, or a
+ * user token that holds leads_retrieval and can access the Page. The Page
+ * token is first choice (it always works for the env system user). But for a
+ * Facebook-Login account, minting a Page token requires the signed-in person
+ * to hold a task ON that specific Page - a Business admin often does not, and
+ * the failure was swallowed per-campaign: 56 leads sitting on Meta, zero
+ * arriving, no error anywhere. When the Page token cannot be minted and the
+ * scope carries its own user token, that token reads the leads directly.
+ */
+async function leadReadToken(scope?: AccountScope): Promise<string> {
+  try {
+    return await getPageToken(scope);
+  } catch (err) {
+    if (scope?.token) {
+      console.warn(
+        `[meta] no Page token for ${scope.pageId || "?"} - reading leads with the account's user token ` +
+          `(${err instanceof Error ? err.message.slice(0, 120) : err})`
+      );
+      return scope.token;
+    }
+    throw err;
+  }
+}
+
 // ── Lead forms ──────────────────────────────────────────────────────────────
 export type LeadForm = { id: string; name: string; status?: string; leads_count?: number };
 
 export async function listLeadForms(scope?: AccountScope): Promise<LeadForm[]> {
-  const pageToken = await getPageToken(scope);
+  const pageToken = await leadReadToken(scope);
   const pageId = scope?.pageId || metaConfig().pageId;
   const out: LeadForm[] = [];
   let after: string | undefined;
@@ -468,7 +495,7 @@ const LEAD_FIELDS =
  * Meta for leads newer than what we already stored, so the cron stays cheap.
  */
 export async function fetchFormLeads(formId: string, since?: number, scope?: AccountScope): Promise<RawLead[]> {
-  const pageToken = await getPageToken(scope);
+  const pageToken = await leadReadToken(scope);
   const out: RawLead[] = [];
   let after: string | undefined;
 
@@ -628,7 +655,7 @@ export async function listCampaignAds(campaignId: string, scope?: AccountScope):
 
 /** Leads for one ad. Page-scoped edge, so it needs the Page token like forms do. */
 export async function fetchAdLeads(adId: string, since?: number, scope?: AccountScope): Promise<RawLead[]> {
-  const pageToken = await getPageToken(scope);
+  const pageToken = await leadReadToken(scope);
   const out: RawLead[] = [];
   let after: string | undefined;
 

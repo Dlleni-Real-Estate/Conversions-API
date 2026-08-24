@@ -82,10 +82,12 @@ export async function GET(req: NextRequest) {
         for (const c of cs) scopeOf.set(c.id, acc);
         everyCampaign.push(...cs);
       } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[sync] account ${acc.name || acc.adAccountId} failed to list campaigns: ${msg}`);
         perCampaign.push({
           campaign: `(account ${acc.name || acc.adAccountId})`,
           ads: 0, found: 0, inserted: 0,
-          error: err instanceof Error ? err.message : String(err),
+          error: msg,
         });
       }
     }
@@ -213,12 +215,17 @@ export async function GET(req: NextRequest) {
           ),
         });
       } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // The response carries this too, but nobody reads a cron's response
+        // body. The log line is what turns "zero leads, all green" into a
+        // named failure - that exact silence hid a Page-token refusal once.
+        console.error(`[sync] campaign "${campaign.name}" failed: ${msg}`);
         perCampaign.push({
           campaign: campaign.name,
           ads: 0,
           found: 0,
           inserted: 0,
-          error: err instanceof Error ? err.message : String(err),
+          error: msg,
         });
       }
     }
