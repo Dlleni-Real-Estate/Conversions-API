@@ -47,6 +47,7 @@ export default function AdAccounts({ pw }: { pw: string }) {
   const [data, setData] = useState<Payload | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
   const [picked, setPicked] = useState<Record<string, string>>({});
   const [pickedPage, setPickedPage] = useState<Record<string, string>>({});
 
@@ -161,6 +162,13 @@ export default function AdAccounts({ pw }: { pw: string }) {
     }
   };
 
+  // A fresh connection means fresh campaigns and leads the next sync would
+  // only fetch in up to ten minutes. Kick one now, fire-and-forget: the
+  // endpoint is idempotent and cron-safe, and a minute beats ten.
+  const kickSync = () => {
+    fetch("/api/sync", { headers: { "x-app-password": pw } }).catch(() => {});
+  };
+
   // Forget this sign-in, server side included, so the next login starts from
   // a clean consent screen - the way a newly added permission gets asked for.
   const signOutOAuth = async () => {
@@ -239,6 +247,8 @@ export default function AdAccounts({ pw }: { pw: string }) {
         return;
       }
       setProbe((p) => (p ? { ...p, available: p.available.filter((x) => x.id !== a.id) } : p));
+      setInfo(t.accConnectedNext);
+      kickSync();
       await load();
     } catch {
       setErr(t.connectionError);
@@ -366,6 +376,9 @@ export default function AdAccounts({ pw }: { pw: string }) {
 
       {err && (
         <p className="mb-3 rounded-lg border border-red-200 bg-red-50 p-3 text-xs leading-relaxed text-red-700">{err}</p>
+      )}
+      {info && (
+        <p className="mb-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs leading-relaxed text-emerald-800">{info}</p>
       )}
       {data.listError && (
         <p className="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">

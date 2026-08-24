@@ -34,6 +34,9 @@ export async function GET(req: NextRequest) {
     .order("submitted_at", { ascending: false })
     .limit(Number(p.get("limit") || 500));
 
+  const account = (p.get("account") || "").replace(/^act_/, "");
+  if (account && account !== "all") q = q.eq("ad_account_id", account);
+
   const status = p.get("status");
   if (status && status !== "all") {
     q = status === "open" ? q.in("status", OPEN_STATUSES) : q.eq("status", status);

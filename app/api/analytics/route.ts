@@ -57,20 +57,28 @@ export async function GET(req: NextRequest) {
   const campaign = req.nextUrl.searchParams.get("campaign");
   const scoped = campaign && campaign !== "all" ? campaign : null;
 
+  // The account switcher: one ad account's world at a time. Leads and
+  // campaign insights carry ad_account_id directly; the ads view predates the
+  // column, so its rows are narrowed through the campaigns that survived.
+  const accountParam = (req.nextUrl.searchParams.get("account") || "").replace(/^act_/, "");
+  const account = accountParam && accountParam !== "all" ? accountParam : null;
+
   let leadQuery = db
     .from("leads")
     .select(
-      "lead_id,status,submitted_at,status_at,deal_value,ad_id,ad_name,campaign_id,campaign_name,platform,raw_fields,quality_score"
+      "lead_id,status,submitted_at,status_at,deal_value,ad_id,ad_name,campaign_id,campaign_name,platform,raw_fields,quality_score,ad_account_id"
     )
     .order("submitted_at", { ascending: false })
     .limit(5000);
   if (scoped) leadQuery = leadQuery.eq("campaign_id", scoped);
+  if (account) leadQuery = leadQuery.eq("ad_account_id", account);
 
   let adQuery = db.from("ad_performance").select("*");
   if (scoped) adQuery = adQuery.eq("campaign_id", scoped);
 
   let ciQuery = db.from("campaign_insights").select("*");
   if (scoped) ciQuery = ciQuery.eq("campaign_id", scoped);
+  if (account) ciQuery = ciQuery.eq("ad_account_id", account);
 
   const [{ data: leadsRaw, error: leadErr }, { data: adsRaw, error: adErr }, { data: formRows }, { data: ciRaw }] =
     await Promise.all([
@@ -86,7 +94,7 @@ export async function GET(req: NextRequest) {
   if (adErr) return NextResponse.json({ error: adErr.message }, { status: 500 });
 
   const leads = (leadsRaw ?? []) as LeadRow[];
-  const ads = (adsRaw ?? []) as Record<string, number | string | null>[];
+  let ads = (adsRaw ?? []) as Record<string, number | string | null>[];
 
   // Average quality score per ad, folded into the ad rows. The stage columns
   // already say which creative FILLS forms; the score says which creative
@@ -108,6 +116,14 @@ export async function GET(req: NextRequest) {
     }
   }
   const ci = (ciRaw ?? []) as CampaignInsightRow[];
+
+  if (account) {
+    const allowed = new Set<string>([
+      ...ci.map((r) => r.campaign_id),
+      ...leads.map((l) => l.campaign_id).filter((v): v is string => Boolean(v)),
+    ]);
+    ads = ads.filter((r) => allowed.has(String(r.campaign_id ?? "")));
+  }
 
   // ── Delivery and money: Meta's own numbers, not ours ─────────────────────
   //
@@ -326,12 +342,23 @@ export async function GET(req: NextRequest) {
     }).sort((a, b) => Number(b.spend) - Number(a.spend) || Number(b.leads) - Number(a.leads));
   }
 
+  const { data: accountRows } = await db
+    .from("ad_accounts")
+    .select("ad_account_id,name,business_name,enabled");
+
   return NextResponse.json({
     ok: true,
     currency,
     currencies,
     mixedCurrency,
     scope: scoped,
+    account,
+    accounts: (accountRows ?? []).map((a) => ({
+      ad_account_id: a.ad_account_id as string,
+      name: (a.name as string | null) ?? null,
+      business_name: (a.business_name as string | null) ?? null,
+      enabled: Boolean(a.enabled),
+    })),
     campaigns,
     // Verbatim from Meta — nothing here is derived from our own lead table.
     meta,

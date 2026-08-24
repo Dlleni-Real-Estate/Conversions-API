@@ -89,8 +89,19 @@ export type CampaignBoardRow = {
   date_stop: string | null;
 };
 
+export type AccountRef = {
+  ad_account_id: string;
+  name: string | null;
+  business_name: string | null;
+  enabled: boolean;
+};
+
 export type Analytics = {
   ok: boolean;
+  /** Which single ad account the whole payload is narrowed to, null = all. */
+  account?: string | null;
+  /** Every connected account, for the header switcher and the board badges. */
+  accounts?: AccountRef[];
   currency: string;
   /** Every currency in scope. More than one means the totals below are mixed. */
   currencies?: string[];

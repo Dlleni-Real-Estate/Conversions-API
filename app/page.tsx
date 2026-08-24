@@ -45,6 +45,7 @@ function Dashboard() {
   const [statusFilter, setStatusFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [scope, setScope] = useState("all");
+  const [account, setAccount] = useState("all");
   const [lastLoaded, setLastLoaded] = useState<Date | null>(null);
 
   useEffect(() => {
@@ -60,8 +61,10 @@ function Dashboard() {
       setLoading(true);
       setErr(null);
       try {
-        const leadQs = new URLSearchParams({ status: statusFilter, campaign: scope, ...(search ? { q: search } : {}) });
-        const analyticsQs = new URLSearchParams({ campaign: scope });
+        const leadQs = new URLSearchParams({
+          status: statusFilter, campaign: scope, account, ...(search ? { q: search } : {}),
+        });
+        const analyticsQs = new URLSearchParams({ campaign: scope, account });
 
         const [leadRes, statsRes] = await Promise.all([
           fetch(`/api/leads?${leadQs}`, { headers: { "x-app-password": password } }),
@@ -90,13 +93,13 @@ function Dashboard() {
         setLoading(false);
       }
     },
-    [pw, statusFilter, search, scope]
+    [pw, statusFilter, search, scope, account]
   );
 
   useEffect(() => {
     if (authed) load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authed, statusFilter, scope]);
+  }, [authed, statusFilter, scope, account]);
 
   // Search reloads on its own, debounced. It used to sit outside the effect's
   // dependency list entirely, which is why typing in the box did nothing until
@@ -169,6 +172,26 @@ function Dashboard() {
 
             <div className="flex flex-wrap items-center gap-2">
               <LangSwitch />
+              {(analytics?.accounts?.length ?? 0) > 1 && (
+                <select
+                  value={account}
+                  onChange={(e) => {
+                    // A different account means a different campaign list -
+                    // holding the old campaign scope would show an empty page
+                    // that looks broken rather than filtered.
+                    setAccount(e.target.value);
+                    setScope("all");
+                  }}
+                  className="tap max-w-[11rem] rounded-lg border border-brand-300 bg-brand-50 px-3 py-1.5 text-xs font-medium text-brand-800 shadow-card sm:max-w-none"
+                >
+                  <option value="all">{t.allAccounts}</option>
+                  {analytics?.accounts?.map((a) => (
+                    <option key={a.ad_account_id} value={a.ad_account_id}>
+                      {(a.name || a.ad_account_id) + (a.business_name ? ` \u2014 ${a.business_name}` : "")}
+                    </option>
+                  ))}
+                </select>
+              )}
               {campaignOptions.length > 1 && (
                 <select
                   value={scope}
