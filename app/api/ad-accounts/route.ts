@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 import { isAuthed } from "@/lib/auth";
-import { datasetsForAccount, listAdAccounts, pagesForAccount, verifyPairing } from "@/lib/meta";
+import { accountBusiness, datasetsForAccount, listAdAccounts, pagesForAccount, verifyPairing } from "@/lib/meta";
 import { tokenExpiry, tokenForNonce } from "@/lib/oauth";
 
 export const dynamic = "force-dynamic";
@@ -211,10 +211,17 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // Asked of Meta with the connect token, not trusted from the client: the
+  // Business name on the row is what tells two same-named campaigns apart on
+  // every screen after this one.
+  const biz = await accountBusiness(accountId, ownToken ?? undefined);
+
   const { error } = await db.from("ad_accounts").upsert(
     {
       ad_account_id: accountId,
       name: body?.name ?? null,
+      business_id: biz.id ?? null,
+      business_name: biz.name ?? null,
       dataset_id: datasetId,
       dataset_name: check.datasetName ?? null,
       page_id: pageId || null,

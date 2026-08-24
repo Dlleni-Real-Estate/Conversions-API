@@ -15,8 +15,12 @@ type Connected = {
   last_error: string | null;
   /** True when the row carries its own token (an account from another Business). */
   has_own_token?: boolean;
+  business_name?: string | null;
 };
-type Available = { id: string; name?: string; currency?: string; status?: number };
+type Available = {
+  id: string; name?: string; currency?: string; status?: number;
+  business_id?: string; business_name?: string;
+};
 type Ref = { id: string; name?: string };
 type Payload = {
   ok: boolean;
@@ -88,11 +92,6 @@ export default function AdAccounts({ pw }: { pw: string }) {
     } catch { setErr(t.connectionError); } finally { setBusy(null); }
   };
 
-  if (!data) return null;
-
-  const connectedIds = new Set(data.connected.map((c) => c.ad_account_id));
-  const notConnected = data.available.filter((a) => !connectedIds.has(a.id));
-
   const runProbeWith = useCallback(
     async (payload: Record<string, string>, auth: { kind: "nonce"; nonce: string } | { kind: "token" }) => {
       setProbing(true);
@@ -158,6 +157,12 @@ export default function AdAccounts({ pw }: { pw: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  if (!data) return null;
+
+  const connectedIds = new Set(data.connected.map((c) => c.ad_account_id));
+  const notConnected = data.available.filter((a) => !connectedIds.has(a.id));
+
+
   const connectProbed = async (a: Available, dataset: string, page: string) => {
     if (!dataset) return;
     setBusy(a.id);
@@ -190,6 +195,34 @@ export default function AdAccounts({ pw }: { pw: string }) {
     } finally {
       setBusy(null);
     }
+  };
+
+  // An already-connected account showing up in a fresh login is not a
+  // duplicate to hide - it is how an expiring sign-in gets renewed. Same
+  // connect call, same pairing, new token; nothing is disconnected on the way.
+  const refreshRow = (a: Available) => {
+    const c = data.connected.find((x) => x.ad_account_id === a.id);
+    if (!c) return null;
+    return (
+      <Card key={a.id} className="flex flex-wrap items-center justify-between gap-3 p-3">
+        <div className="min-w-0">
+          <p dir="auto" className="truncate text-sm font-medium text-slate-700">
+            {a.name || a.id}
+            <span className="ms-2 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+              {t.accAlreadyConnected}
+            </span>
+          </p>
+          <p className="mt-0.5 text-[11px] text-slate-500"><span className="ltr-nums">{a.id}</span></p>
+        </div>
+        <button
+          onClick={() => connectProbed(a, c.dataset_id, c.page_id || "")}
+          disabled={busy === a.id}
+          className="tap rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-card hover:bg-slate-50 disabled:opacity-40"
+        >
+          {busy === a.id ? t.accConnecting : t.accRefreshToken}
+        </button>
+      </Card>
+    );
   };
 
   // Mirrors the env-token candidate card below; kept separate because its
@@ -290,8 +323,9 @@ export default function AdAccounts({ pw }: { pw: string }) {
                 )}
               </p>
               <p className="mt-0.5 text-[11px] text-slate-500">
-                <span className="ltr-nums">{c.ad_account_id}</span> · {t.accDataset}:{" "}
-                {c.dataset_name || c.dataset_id}
+                <span className="ltr-nums">{c.ad_account_id}</span>
+                {c.business_name && <> · <span dir="auto">{c.business_name}</span></>}
+                {" "}· {t.accDataset}: {c.dataset_name || c.dataset_id}
                 {c.page_id && <> · {t.accPage}: <span className="ltr-nums">{c.page_id}</span></>}
                 {c.verified_at && (
                   <> · {t.accVerified} {new Date(c.verified_at).toLocaleDateString(locale)}</>
@@ -441,14 +475,33 @@ export default function AdAccounts({ pw }: { pw: string }) {
           </button>
         </div>
         {probeErr && <p className="mt-2 text-[11px] text-red-600">{probeErr}</p>}
-        {probe && probe.available.filter((a) => !connectedIds.has(a.id)).length === 0 && (
+        {probe && probe.available.length === 0 && (
           <p className="mt-3 text-[11px] text-slate-500">{t.accProbeNone}</p>
         )}
-        {probe && (
-          <div className="mt-3 space-y-3">
-            {probe.available.filter((a) => !connectedIds.has(a.id)).map(probeCard)}
-          </div>
-        )}
+        {probe && (() => {
+          // Grouped by owning Business: one Facebook account routinely manages
+          // several, and a flat list of similar names across Businesses is how
+          // the wrong account gets connected.
+          const groups = new Map<string, Available[]>();
+          for (const a of probe.available) {
+            const k = a.business_name || "";
+            const arr = groups.get(k) ?? [];
+            arr.push(a);
+            groups.set(k, arr);
+          }
+          return [...groups.entries()].map(([biz, accs]) => (
+            <div key={biz || "_none"} className="mt-3">
+              {groups.size > 1 && (
+                <p dir="auto" className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                  {biz || t.accPersonalAccounts}
+                </p>
+              )}
+              <div className="space-y-3">
+                {accs.map((a) => (connectedIds.has(a.id) ? refreshRow(a) : probeCard(a)))}
+              </div>
+            </div>
+          ));
+        })()}
       </Card>
     </section>
   );

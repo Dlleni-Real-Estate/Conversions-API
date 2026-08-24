@@ -67,7 +67,10 @@ export const DICT = {
     accOwnToken: "own token",
     accFbLogin: "Connect with Facebook",
     accFbLoginSub:
-      "The fast path: sign in with the Facebook account that manages the other Business, approve once, and its ad accounts appear here ready to connect. The sign-in lives on this server only \u2014 it is never shown, never in a URL. Tokens from this path last ~60 days; the health card warns two weeks before one lapses, and re-connecting is the same two clicks.",
+      "The fast path: sign in with the Facebook account that manages your Businesses, approve once, and every ad account it manages \u2014 across ALL its Businesses \u2014 appears here grouped by Business, ready to connect. Sign in again any time to add another or renew one. The sign-in lives on this server only \u2014 never shown, never in a URL. Tokens from this path last ~60 days; the health card warns two weeks before one lapses, and renewing is the same two clicks.",
+    accAlreadyConnected: "connected",
+    accRefreshToken: "Renew sign-in",
+    accPersonalAccounts: "Personal (no Business)",
     accOrManual: "Or with a manually generated token \u2014 it never expires, but takes setup:",
     hAccTokenExpiring: "Sign-in expiring soon \u2014 reconnect with Facebook Login before it lapses",
     mixedCurrency: (list: string) =>
@@ -302,7 +305,10 @@ export const DICT = {
     accOwnToken: "توكن خاص",
     accFbLogin: "اربط بحساب فيسبوك",
     accFbLoginSub:
-      "الطريقة السريعة: سجّل دخول بحساب الفيسبوك اللي بيدير الـBusiness التاني، اعمل موافقة مرة واحدة، وحساباته الإعلانية هتظهر هنا جاهزة للربط. تسجيل الدخول بيتخزن على السيرفر بس \u2014 مش بيظهر ولا بيعدي في أي لينك. التوكن من الطريق ده بيعيش حوالي 60 يوم؛ كارت الصحة بينبّهك قبل ما يخلص بأسبوعين، وإعادة الربط هي نفس الضغطتين.",
+      "الطريقة السريعة: سجّل دخول بحساب الفيسبوك اللي بيدير الـBusinesses بتاعتك، اعمل موافقة مرة واحدة، وكل الحسابات الإعلانية اللي بيديرها \u2014 من كل الـBusinesses \u2014 هتظهر هنا متقسمة بالـBusiness وجاهزة للربط. وتقدر تسجّل دخول تاني في أي وقت تضيف Business جديد أو تجدد واحد قديم. تسجيل الدخول بيتخزن على السيرفر بس \u2014 مش بيظهر ولا بيعدي في أي لينك. التوكن بيعيش حوالي 60 يوم؛ كارت الصحة بينبّهك قبل ما يخلص بأسبوعين، والتجديد هو نفس الضغطتين.",
+    accAlreadyConnected: "متوصّل",
+    accRefreshToken: "جدّد تسجيل الدخول",
+    accPersonalAccounts: "حسابات شخصية (من غير Business)",
     accOrManual: "أو بتوكن معمول يدوي \u2014 مبيخلصش أبداً، بس محتاج خطوات:",
     hAccTokenExpiring: "تسجيل دخول قرب يخلص \u2014 اعمل ربط بفيسبوك تاني قبل ما يقف",
     mixedCurrency: (list: string) =>

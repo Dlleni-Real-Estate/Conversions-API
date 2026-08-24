@@ -85,17 +85,48 @@ export async function datasetsForAccount(adAccountId: string, tokenOverride?: st
 
 /** Every ad account this token can see, for the connect screen's picker. */
 export async function listAdAccounts(tokenOverride?: string): Promise<
-  { id: string; name?: string; currency?: string; status?: number }[]
+  { id: string; name?: string; currency?: string; status?: number; business_id?: string; business_name?: string }[]
 > {
   const token = tokenOverride || metaConfig().token;
-  const json = await graph<{ data?: { account_id: string; name?: string; currency?: string; account_status?: number }[] }>(
+  // One Facebook account routinely manages several Businesses, and this edge
+  // returns the ad accounts of ALL of them in one flat list. The owning
+  // Business rides along on each row so the picker can group by it - a flat
+  // list of same-looking account names across three Businesses is how the
+  // wrong one gets connected.
+  const json = await graph<{
+    data?: {
+      account_id: string; name?: string; currency?: string; account_status?: number;
+      business?: { id?: string; name?: string };
+    }[];
+  }>(
     "/me/adaccounts",
-    { fields: "account_id,name,currency,account_status", limit: "100" },
+    { fields: "account_id,name,currency,account_status,business{id,name}", limit: "100" },
     token
   );
   return (json.data ?? []).map((a) => ({
     id: a.account_id, name: a.name, currency: a.currency, status: a.account_status,
+    business_id: a.business?.id, business_name: a.business?.name,
   }));
+}
+
+/** Which Business owns this ad account, from the account itself. */
+export async function accountBusiness(
+  adAccountId: string,
+  tokenOverride?: string
+): Promise<{ id?: string; name?: string }> {
+  const token = tokenOverride || metaConfig().token;
+  const id = adAccountId.replace(/^act_/, "");
+  try {
+    const json = await graph<{ business?: { id?: string; name?: string } }>(
+      `/act_${id}`,
+      { fields: "business{id,name}" },
+      token
+    );
+    return json.business ?? {};
+  } catch {
+    // A personal (non-Business) ad account has none; not an error.
+    return {};
+  }
 }
 
 /**
