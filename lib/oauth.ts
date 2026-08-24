@@ -24,8 +24,14 @@ const GRAPH = `https://graph.facebook.com/${process.env.META_API_VERSION || "v23
 
 export const OAUTH_CONFIGURED = Boolean(process.env.META_APP_ID && process.env.META_APP_SECRET);
 
-/** Nonces and parked tokens live this long - enough to pick accounts, no more. */
-const TTL_MS = 15 * 60 * 1000;
+/**
+ * How long a parked sign-in lives. An hour, because the first cut used fifteen
+ * minutes and the account list kept vanishing mid-exploration - switch to the
+ * Pipeline tab, come back, gone. The dashboard remembers the nonce per-tab and
+ * re-probes quietly, so within this window the list just stays; past it, the
+ * server has forgotten the token and the login button is two clicks again.
+ */
+const TTL_MS = 60 * 60 * 1000;
 
 export function oauthScopes(): string {
   // Everything the per-account calls make: list accounts and datasets

@@ -250,13 +250,17 @@ function Dashboard() {
             </div>
           ))}
 
-        {tab === "settings" && (
-          <div className="space-y-6">
-            <HealthPanel pw={pw} />
-            <AdAccounts pw={pw} />
-            <CampaignSettings pw={pw} />
-          </div>
-        )}
+        {/* Kept mounted, only hidden. Unmounting on every tab switch threw
+            away all three components' state, so coming back meant a full
+            reload each time - health, accounts, datasets, pages, campaigns,
+            five Meta round-trips to redraw a screen that had just been open.
+            Hidden, it keeps its state and reappears instantly; each component
+            still refreshes itself on its own terms. */}
+        <div hidden={tab !== "settings"} className="space-y-6">
+          <HealthPanel pw={pw} />
+          <AdAccounts pw={pw} />
+          <CampaignSettings pw={pw} />
+        </div>
         </div>
 
         {selected && (

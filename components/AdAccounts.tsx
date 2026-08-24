@@ -97,7 +97,11 @@ export default function AdAccounts({ pw }: { pw: string }) {
   };
 
   const runProbeWith = useCallback(
-    async (payload: Record<string, string>, auth: { kind: "nonce"; nonce: string } | { kind: "token" }) => {
+    async (
+      payload: Record<string, string>,
+      auth: { kind: "nonce"; nonce: string } | { kind: "token" },
+      opts?: { silent?: boolean }
+    ) => {
       setProbing(true);
       setProbeErr(null);
       try {
@@ -118,7 +122,13 @@ export default function AdAccounts({ pw }: { pw: string }) {
         } else {
           setProbe(null);
           setProbeAuth(null);
-          setProbeErr(j.error || "Error");
+          if (opts?.silent) {
+            // A remembered sign-in the server has since forgotten. Not an
+            // error - just stop remembering it.
+            try { window.sessionStorage.removeItem("fb_oauth_nonce"); } catch { /* private mode */ }
+          } else {
+            setProbeErr(j.error || "Error");
+          }
         }
       } catch {
         setProbeErr(t.connectionError);
@@ -151,7 +161,17 @@ export default function AdAccounts({ pw }: { pw: string }) {
     const done = sp.get("oauth_done");
     const oerr = sp.get("oauth_error");
     if (oerr) setProbeErr(oerr);
-    if (done) runProbeWith({ oauth_nonce: done }, { kind: "nonce", nonce: done });
+    if (done) {
+      // Remember the sign-in for this browser tab, so the account list
+      // survives a reload or a trip to another dashboard tab instead of
+      // silently vanishing. The server still expires it after an hour.
+      try { window.sessionStorage.setItem("fb_oauth_nonce", done); } catch { /* private mode */ }
+      runProbeWith({ oauth_nonce: done }, { kind: "nonce", nonce: done });
+    } else {
+      let saved: string | null = null;
+      try { saved = window.sessionStorage.getItem("fb_oauth_nonce"); } catch { /* private mode */ }
+      if (saved) runProbeWith({ oauth_nonce: saved }, { kind: "nonce", nonce: saved }, { silent: true });
+    }
     if (done || oerr) {
       sp.delete("oauth_done");
       sp.delete("oauth_error");
