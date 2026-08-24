@@ -56,6 +56,7 @@ export const DICT = {
     accNoDataset: "No dataset is connected to this ad account, so Meta would accept every event for it and attribute none. Assign one first: Business Settings → Data sources → Datasets → your dataset → Connected assets → Add ad account.",
     accountsListFail: "Could not list ad accounts from Meta",
     accPage: "page",
+    accPageUnassigned: "Meta ties no Page to this ad account, so the list below is your own Pages. Pick the one whose lead forms this account runs \u2014 the wrong one reads zero leads and reports no error.",
     mixedCurrency: (list: string) =>
       `Spend here comes from ad accounts in different currencies (${list}). The totals add the raw numbers, so read them per campaign rather than as one figure.`,
     campAccountFailed: (n: string) => `Could not read campaigns from ${n}`,
@@ -277,6 +278,7 @@ export const DICT = {
     accNoDataset: "مفيش داتاسِت متوصّل بحساب الإعلانات ده، يعني ميتا هتقبل كل حدث وتنسبه لولا حاجة. وصّل واحد الأول: Business Settings ← Data sources ← Datasets ← الداتاسِت ← Connected assets ← Add ad account.",
     accountsListFail: "معرفناش نجيب حسابات الإعلانات من ميتا",
     accPage: "صفحة",
+    accPageUnassigned: "ميتا مش رابطة أي صفحة بحساب الإعلانات ده، فاللي تحت دي صفحاتك انت. اختار الصفحة اللي فورمات الليدز بتاعتها شغالة من الحساب ده — لو اخترت غلط مش هتيجي ولا ليد ومش هيظهر أي إيرور.",
     mixedCurrency: (list: string) =>
       `المصروف هنا جاي من حسابات إعلانات بعملات مختلفة (${list}). الإجماليات بتجمع الأرقام زي ما هي، فاقراها لكل كمبين لوحدها مش كرقم واحد.`,
     campAccountFailed: (n: string) => `معرفناش نقرا كمبينات ${n}`,

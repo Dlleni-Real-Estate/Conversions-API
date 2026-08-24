@@ -47,7 +47,7 @@ alter table public.ad_insights      add column if not exists ad_account_id text;
 -- Seed the account that is already live, already verified by the fact that it
 -- has been sending accepted events to this dataset for days.
 insert into public.ad_accounts (ad_account_id, name, dataset_id, dataset_name, page_id, currency, enabled, verified_at)
-values ('736420925136885', 'dlleni ads one', '1718089652564651', 'Dlleni CRM Events', '109652897854140', 'EGP', true, now())
+values ('736420925136885', 'dlleni ads one', '1718089652564651', '8X CRM Events', '109652897854140', 'EGP', true, now())
 on conflict (ad_account_id) do nothing;
 
 -- Everything stored so far came from that account.

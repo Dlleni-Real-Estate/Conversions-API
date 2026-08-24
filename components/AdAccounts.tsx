@@ -22,6 +22,7 @@ type Payload = {
   available: Available[];
   datasets: Record<string, Ref[]>;
   pages: Record<string, Ref[]>;
+  pageSource: Record<string, "account" | "user" | "none">;
   envPageId: string | null;
   listError: string | null;
 };
@@ -140,9 +141,17 @@ export default function AdAccounts({ pw }: { pw: string }) {
             {notConnected.map((a) => {
               const sets = data.datasets[a.id] ?? [];
               const pages = data.pages?.[a.id] ?? [];
+              const src = data.pageSource?.[a.id] ?? "none";
               const blocked = sets.length === 0;
               const chosen = picked[a.id] ?? sets[0]?.id ?? "";
-              const chosenPage = pickedPage[a.id] ?? pages[0]?.id ?? "";
+              // When Meta named no Page for this account these are just the
+              // Pages the token can see, so the one already in use is the
+              // sensible default rather than whatever came back first.
+              const fallbackPage =
+                (src === "user" && data.envPageId && pages.some((p) => p.id === data.envPageId)
+                  ? data.envPageId
+                  : pages[0]?.id) ?? "";
+              const chosenPage = pickedPage[a.id] ?? fallbackPage;
               return (
                 <Card key={a.id} className="flex flex-wrap items-center justify-between gap-3 p-4">
                   <div className="min-w-0">
@@ -154,6 +163,11 @@ export default function AdAccounts({ pw }: { pw: string }) {
                     {blocked && (
                       <p className="mt-1.5 max-w-xl rounded-lg border border-amber-200 bg-amber-50 p-2 text-[11px] leading-relaxed text-amber-800">
                         {t.accNoDataset}
+                      </p>
+                    )}
+                    {!blocked && src === "user" && (
+                      <p className="mt-1.5 max-w-xl rounded-lg border border-slate-200 bg-slate-50 p-2 text-[11px] leading-relaxed text-slate-600">
+                        {t.accPageUnassigned}
                       </p>
                     )}
                   </div>

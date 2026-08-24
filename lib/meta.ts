@@ -100,20 +100,49 @@ export async function listAdAccounts(): Promise<
  * arrive - with no error to explain it. So the Page is asked for at connect
  * time and stored per account instead of inherited from the environment.
  */
-export async function pagesForAccount(adAccountId: string): Promise<{ id: string; name?: string }[]> {
+export type AccountPages = {
+  pages: { id: string; name?: string }[];
+  /**
+   * "account" - Meta ties these Pages to this ad account. That is an answer.
+   * "user"    - Meta ties NONE to it, so these are the Pages the token can
+   *             see. That is a choice for a human, not an answer, and it is
+   *             labelled as one rather than being quietly picked from.
+   * "none"    - nothing to offer.
+   */
+  source: "account" | "user" | "none";
+  /** Set when Meta refused the question, which is not the same as answering none. */
+  error?: string;
+};
+
+export async function pagesForAccount(adAccountId: string): Promise<AccountPages> {
   const { token } = metaConfig();
   const id = adAccountId.replace(/^act_/, "");
+  let error: string | undefined;
+
   try {
     const json = await graph<{ data?: { id: string; name?: string }[] }>(
       `/act_${id}/promote_pages`,
       { fields: "id,name", limit: "50" },
       token
     );
-    return json.data ?? [];
-  } catch {
-    // Some tokens cannot read this edge. Not fatal: the picker falls back to
-    // the environment's Page, which is right for a single-Page business.
-    return [];
+    const pages = json.data ?? [];
+    if (pages.length > 0) return { pages, source: "account" };
+  } catch (err) {
+    // Recorded, not swallowed. An empty list and a refused question look the
+    // same to every caller unless one of them says which it was.
+    error = err instanceof Error ? err.message : String(err);
+  }
+
+  try {
+    const json = await graph<{ data?: { id: string; name?: string }[] }>(
+      "/me/accounts",
+      { fields: "id,name", limit: "100" },
+      token
+    );
+    const pages = json.data ?? [];
+    return { pages, source: pages.length > 0 ? "user" : "none", error };
+  } catch (err) {
+    return { pages: [], source: "none", error: error ?? (err instanceof Error ? err.message : String(err)) };
   }
 }
 

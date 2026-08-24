@@ -44,14 +44,16 @@ export async function GET(req: NextRequest) {
   // ever arrives - with nothing anywhere saying why.
   const datasets: Record<string, { id: string; name?: string }[]> = {};
   const pages: Record<string, { id: string; name?: string }[]> = {};
+  const pageSource: Record<string, string> = {};
   await Promise.all(
     available.map(async (a) => {
       const [d, p] = await Promise.all([
         datasetsForAccount(a.id).catch(() => []),
-        pagesForAccount(a.id).catch(() => []),
+        pagesForAccount(a.id).catch(() => ({ pages: [], source: "none" as const })),
       ]);
       datasets[a.id] = d;
-      pages[a.id] = p;
+      pages[a.id] = p.pages;
+      pageSource[a.id] = p.source;
     })
   );
 
@@ -61,6 +63,7 @@ export async function GET(req: NextRequest) {
     available,
     datasets,
     pages,
+    pageSource,
     envPageId: process.env.META_PAGE_ID || null,
     listError,
   });
@@ -102,15 +105,24 @@ export async function POST(req: NextRequest) {
   // forever without ever reporting an error.
   let pageId = (body?.page_id || "").trim();
   if (!pageId) {
-    const pages = await pagesForAccount(accountId).catch(() => []);
-    if (pages.length === 1) pageId = pages[0].id;
-    else if (pages.length === 0) pageId = process.env.META_PAGE_ID || "";
+    const p = await pagesForAccount(accountId).catch(
+      () => ({ pages: [] as { id: string; name?: string }[], source: "none" as const })
+    );
+    if (p.pages.length === 1) pageId = p.pages[0].id;
+    else if (p.pages.length === 0) pageId = process.env.META_PAGE_ID || "";
     else {
+      // More than one candidate and no instruction. Picking one here would be
+      // a guess that reads zero leads and reports nothing, so it is refused
+      // and the candidates are handed back for a human to choose from.
       return NextResponse.json(
         {
           ok: false,
-          error: `Ad account ${accountId} advertises ${pages.length} Pages. Choose which one owns the lead forms.`,
-          pages,
+          error:
+            p.source === "account"
+              ? `Ad account ${accountId} advertises ${p.pages.length} Pages. Choose which one owns the lead forms.`
+              : `Meta ties no Page to ad account ${accountId}. Choose which of your Pages owns its lead forms.`,
+          pages: p.pages,
+          pageSource: p.source,
         },
         { status: 400 }
       );
