@@ -92,11 +92,6 @@ export async function activeAccounts(db: DB): Promise<ActiveAccounts> {
   return { scopes, source: "table", skipped };
 }
 
-/** ad_account_id -> dataset_id, for routing an event to the right dataset. */
-export function datasetIndex(scopes: AccountScope[]): Map<string, string> {
-  return new Map(scopes.map((s) => [s.adAccountId, s.datasetId]));
-}
-
 /** ad_account_id -> full scope, when the caller needs dataset AND token. */
 export function scopeIndex(scopes: AccountScope[]): Map<string, AccountScope> {
   return new Map(scopes.map((s) => [s.adAccountId, s]));

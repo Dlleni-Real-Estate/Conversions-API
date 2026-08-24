@@ -163,8 +163,16 @@ export type EmqEvent = {
   match_keys: { identifier: string; coverage: number }[];
 };
 
+const emqCache = new Map<string, { at: number; events: EmqEvent[] }>();
+const EMQ_TTL_MS = 5 * 60 * 1000;
+
 export async function datasetQuality(datasetId: string, tokenOverride?: string): Promise<EmqEvent[]> {
   const token = tokenOverride || metaConfig().token;
+  // Meta recomputes these scores on the scale of hours; the dashboard asks on
+  // every load. Five minutes per warm lambda keeps Settings snappy without
+  // ever showing meaningfully stale numbers.
+  const hit = emqCache.get(datasetId);
+  if (hit && Date.now() - hit.at < EMQ_TTL_MS) return hit.events;
   try {
     const json = await graph<{
       web?: {
@@ -175,7 +183,7 @@ export async function datasetQuality(datasetId: string, tokenOverride?: string):
         };
       }[];
     }>("/dataset_quality", { dataset_id: datasetId }, token);
-    return (json.web ?? []).map((e) => ({
+    const events = (json.web ?? []).map((e) => ({
       event_name: e.event_name ?? "?",
       score: typeof e.event_match_quality?.composite_score === "number" ? e.event_match_quality.composite_score : null,
       match_keys: (e.event_match_quality?.match_key_feedback ?? []).map((k) => ({
@@ -183,6 +191,8 @@ export async function datasetQuality(datasetId: string, tokenOverride?: string):
         coverage: k.coverage?.percentage ?? 0,
       })),
     }));
+    emqCache.set(datasetId, { at: Date.now(), events });
+    return events;
   } catch {
     return [];
   }

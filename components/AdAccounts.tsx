@@ -161,6 +161,23 @@ export default function AdAccounts({ pw }: { pw: string }) {
     }
   };
 
+  // Forget this sign-in, server side included, so the next login starts from
+  // a clean consent screen - the way a newly added permission gets asked for.
+  const signOutOAuth = async () => {
+    const nonce = probeAuth?.kind === "nonce" ? probeAuth.nonce : null;
+    try { window.sessionStorage.removeItem("fb_oauth_nonce"); } catch { /* private mode */ }
+    setProbe(null);
+    setProbeAuth(null);
+    setProbeErr(null);
+    if (nonce) {
+      fetch("/api/ad-accounts", {
+        method: "POST",
+        headers: { "x-app-password": pw, "Content-Type": "application/json" },
+        body: JSON.stringify({ oauth_signout: nonce }),
+      }).catch(() => {});
+    }
+  };
+
   // Returning from Facebook: the URL carries only a nonce (never a token).
   // Probe with it immediately, then scrub the query string so a reload or a
   // shared link replays nothing.
@@ -545,18 +562,26 @@ export default function AdAccounts({ pw }: { pw: string }) {
         )}
         {probeErr && <p className="mt-2 text-[11px] text-red-600">{probeErr}</p>}
         {probe && (
-          <p className="mt-3 text-[11px] leading-relaxed text-slate-500">
-            {t.accSignedIn}: <span dir="auto" className="font-medium text-slate-700">{probe.signedInAs || "\u2014"}</span>
-            {" \u00b7 "}
-            {t.accGrantedBiz}:{" "}
-            {probe.businesses && probe.businesses.length > 0 ? (
-              <span dir="auto" className="font-medium text-slate-700">
-                {probe.businesses.map((b) => b.name || b.id).join(" \u00b7 ")}
-              </span>
-            ) : (
-              <span className="text-amber-700">{t.accNoBizGranted}</span>
-            )}
-          </p>
+          <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1">
+            <p className="text-[11px] leading-relaxed text-slate-500">
+              {t.accSignedIn}: <span dir="auto" className="font-medium text-slate-700">{probe.signedInAs || "\u2014"}</span>
+              {" \u00b7 "}
+              {t.accGrantedBiz}:{" "}
+              {probe.businesses && probe.businesses.length > 0 ? (
+                <span dir="auto" className="font-medium text-slate-700">
+                  {probe.businesses.map((b) => b.name || b.id).join(" \u00b7 ")}
+                </span>
+              ) : (
+                <span className="text-amber-700">{t.accNoBizGranted}</span>
+              )}
+            </p>
+            <button
+              onClick={signOutOAuth}
+              className="tap text-[11px] font-medium text-red-500 underline decoration-dotted underline-offset-2 hover:text-red-700"
+            >
+              {t.accSignOut}
+            </button>
+          </div>
         )}
         {probe && probe.available.length === 0 && (
           <p className="mt-3 text-[11px] text-slate-500">{t.accProbeNone}</p>

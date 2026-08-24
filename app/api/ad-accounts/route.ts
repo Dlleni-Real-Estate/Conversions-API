@@ -7,7 +7,7 @@ import {
 } from "@/lib/meta";
 import { isAdmin } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
-import { tokenExpiry, tokenForNonce } from "@/lib/oauth";
+import { forgetToken, tokenExpiry, tokenForNonce } from "@/lib/oauth";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -55,16 +55,35 @@ export async function GET(req: NextRequest) {
   // Pages per account for the same reason: leads are read on a Page-scoped
   // edge, so the wrong Page means campaigns list, insights report, and no lead
   // ever arrives - with nothing anywhere saying why.
+  // Fetched ONLY for accounts that could still be connected - the connected
+  // ones never render a picker, so paying two or three Graph calls each for
+  // them was pure Settings-tab latency. The "user" Page fallback narrows
+  // through the account's Business where one exists, same as the login
+  // picker: the whole personal Page list is where wrong-Page mistakes live.
+  const connectedIdSet = new Set(connected.map((c) => String((c as Record<string, unknown>).ad_account_id)));
+  const candidates = available.filter((a) => !connectedIdSet.has(a.id));
+
   const datasets: Record<string, { id: string; name?: string }[]> = {};
   const pages: Record<string, { id: string; name?: string }[]> = {};
   const pageSource: Record<string, string> = {};
   await Promise.all(
-    available.map(async (a) => {
+    candidates.map(async (a) => {
       const [d, p] = await Promise.all([
         datasetsForAccount(a.id).catch(() => []),
-        pagesForAccount(a.id).catch(() => ({ pages: [], source: "none" as const })),
+        pagesForAccount(a.id).catch(() => ({ pages: [] as { id: string; name?: string }[], source: "none" as const })),
       ]);
       datasets[a.id] = d;
+      if (p.source === "user") {
+        const biz = await accountBusiness(a.id).catch(() => ({}) as { id?: string });
+        if (biz.id) {
+          const bp = await businessPages(biz.id).catch(() => []);
+          if (bp.length > 0) {
+            pages[a.id] = bp;
+            pageSource[a.id] = "business";
+            return;
+          }
+        }
+      }
       pages[a.id] = p.pages;
       pageSource[a.id] = p.source;
     })
@@ -88,8 +107,17 @@ export async function POST(req: NextRequest) {
   const body = (await req.json().catch(() => null)) as {
     ad_account_id?: string; dataset_id?: string; page_id?: string; name?: string; enabled?: boolean;
     access_token?: string; probe_token?: string; oauth_nonce?: string;
-    create_dataset?: boolean; dataset_name?: string;
+    create_dataset?: boolean; dataset_name?: string; oauth_signout?: string;
   } | null;
+
+  // Sign-out: forget the parked token now instead of waiting out its hour.
+  // The next login starts clean - which is also how a NEW permission added to
+  // the scope gets its consent screen shown.
+  const signoutNonce = (body?.oauth_signout || "").trim();
+  if (signoutNonce) {
+    await forgetToken(db, signoutNonce);
+    return NextResponse.json({ ok: true, signed_out: true });
+  }
 
   // A Facebook Login hands the browser a nonce, never the token; the token
   // sits server-side under that nonce for a few minutes. Resolving it here

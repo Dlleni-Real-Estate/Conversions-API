@@ -70,6 +70,13 @@ export async function storeToken(db: DB, nonce: string, token: string): Promise<
   );
 }
 
+/** Sign-out: drop the parked token and its state, before the TTL does. */
+export async function forgetToken(db: DB, nonce: string): Promise<void> {
+  if (!/^[a-f0-9]{32}$/.test(nonce)) return;
+  await db.from("app_settings").delete().eq("key", `oauth_token:${nonce}`);
+  await db.from("app_settings").delete().eq("key", `oauth_state:${nonce}`);
+}
+
 /** NOT single use: one login can connect several accounts before the TTL. */
 export async function tokenForNonce(db: DB, nonce: string): Promise<string | null> {
   if (!/^[a-f0-9]{32}$/.test(nonce)) return null;

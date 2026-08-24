@@ -73,6 +73,7 @@ export const DICT = {
     accGrantedBiz: "Businesses granted",
     accNoBizGranted: "none \u2014 sign in again and approve the Businesses you want listed here",
     accPickPage: "\u2014 choose the Page \u2014",
+    accSignOut: "Sign out \u2014 next login asks consent fresh",
     accCreateDataset: "Create dataset & connect",
     accCreateDatasetHint:
       "No dataset on this ad account yet. One click creates one ON the account \u2014 born connected, verified, no Business Settings walk \u2014 and the events it receives carry lead id, hashed phone and email, which is what match quality is made of.",
@@ -105,7 +106,6 @@ export const DICT = {
     accAlreadyConnected: "connected",
     accRefreshToken: "Renew sign-in",
     accPersonalAccounts: "Personal (no Business)",
-    accOrManual: "Or with a manually generated token \u2014 it never expires, but takes setup:",
     hAccTokenExpiring: "Sign-in expiring soon \u2014 reconnect with Facebook Login before it lapses",
     mixedCurrency: (list: string) =>
       `Spend here comes from ad accounts in different currencies (${list}). The totals add the raw numbers, so read them per campaign rather than as one figure.`,
@@ -345,6 +345,7 @@ export const DICT = {
     accGrantedBiz: "الـBusinesses الممنوحة",
     accNoBizGranted: "ولا واحد \u2014 سجّل تاني ووافق على الـBusinesses اللي عايزها تظهر هنا",
     accPickPage: "\u2014 اختار الصفحة \u2014",
+    accSignOut: "تسجيل خروج \u2014 الدخول الجاي بموافقة جديدة",
     accCreateDataset: "أنشئ داتاسِت واربط",
     accCreateDatasetHint:
       "مفيش داتاسِت على حساب الإعلانات ده. ضغطة واحدة بتعمل واحد على الحساب نفسه \u2014 بيتولد متوصّل ومتأكد منه، من غير مشوار Business Settings \u2014 والأحداث اللي بتوصله شايلة رقم الليد والتليفون والإيميل مشفّرين، ودي أساس جودة المطابقة.",
@@ -377,7 +378,6 @@ export const DICT = {
     accAlreadyConnected: "متوصّل",
     accRefreshToken: "جدّد تسجيل الدخول",
     accPersonalAccounts: "حسابات شخصية (من غير Business)",
-    accOrManual: "أو بتوكن معمول يدوي \u2014 مبيخلصش أبداً، بس محتاج خطوات:",
     hAccTokenExpiring: "تسجيل دخول قرب يخلص \u2014 اعمل ربط بفيسبوك تاني قبل ما يقف",
     mixedCurrency: (list: string) =>
       `المصروف هنا جاي من حسابات إعلانات بعملات مختلفة (${list}). الإجماليات بتجمع الأرقام زي ما هي، فاقراها لكل كمبين لوحدها مش كرقم واحد.`,
