@@ -39,7 +39,7 @@ export async function GET(req: NextRequest) {
     return count ?? 0;
   };
 
-  const [lastRun, sent, failed, pending, lastFailure, crmSetting, leadTotal] = await Promise.all([
+  const [lastRun, sent, failed, pending, lastFailure, crmSetting, leadTotal, accountRows] = await Promise.all([
     db.from("sync_runs").select("started_at,finished_at,ok,error,leads_found,leads_new")
       .order("started_at", { ascending: false }).limit(1).maybeSingle(),
     countEvents("sent"),
@@ -49,15 +49,55 @@ export async function GET(req: NextRequest) {
       .order("created_at", { ascending: false }).limit(1).maybeSingle(),
     db.from("app_settings").select("value").eq("key", "last_crm_sync").maybeSingle(),
     db.from("leads").select("lead_id", { count: "exact", head: true }),
+    db.from("ad_accounts").select("ad_account_id,name,dataset_id,enabled,verified_at"),
   ]);
+
+  type AccountRow = {
+    ad_account_id: string; name: string | null; dataset_id: string;
+    enabled: boolean; verified_at: string | null;
+  };
+  const rows = (accountRows.data ?? []) as AccountRow[];
 
   return NextResponse.json({
     ok: true,
     sender: SENDER,
     appSends: APP_SENDS_EVENTS,
     crmConfigured: CRM_CONFIGURED,
-    // With the app sending, 8X's own integration must stay off — one sender.
-    dualSenderRisk: APP_SENDS_EVENTS && CRM_CONFIGURED,
+
+    // Who is talking to Meta, stated precisely.
+    //
+    // This used to be one boolean called dualSenderRisk, set whenever an 8X API
+    // key existed. That was wrong in a way that mattered: the key is what we
+    // READ the CRM with, and reading is not sending. It made a healthy setup
+    // look like a double-counting one on every load.
+    //
+    // Whether 8X's own Meta integration is switched on is a checkbox inside 8X
+    // that no API exposes. So it is reported as unknown rather than inferred —
+    // an unknown you can go and check beats a boolean that is confidently wrong.
+    senders: {
+      app: APP_SENDS_EVENTS,
+      crmApiConfigured: CRM_CONFIGURED,
+      crmIntegrationOn: null as boolean | null,
+    },
+
+    // Multi-account state, for the same reason the sync logs it: an account
+    // that is connected but unverified explains a campaign that never appears.
+    accounts: {
+      connected: rows.length,
+      active: rows.filter((a) => a.enabled && a.verified_at).length,
+      unverified: rows.filter((a) => a.enabled && !a.verified_at)
+        .map((a) => a.name || a.ad_account_id),
+      paused: rows.filter((a) => !a.enabled).map((a) => a.name || a.ad_account_id),
+      // Two accounts pointed at one dataset is legal in Meta and almost never
+      // intended: their events land in one funnel and neither optimises well.
+      sharedDatasets: [
+        ...new Set(
+          rows.filter((a) => a.enabled)
+            .map((a) => a.dataset_id)
+            .filter((d, _i, all) => all.filter((x) => x === d).length > 1)
+        ),
+      ],
+    },
     leads: leadTotal.count ?? 0,
     lastSync: lastRun.data ?? null,
     capi7d: {

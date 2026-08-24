@@ -9,7 +9,9 @@ import {
   fetchFormSchema,
   flattenFields,
   normalizeEgyptPhone,
+  type AccountScope,
 } from "@/lib/meta";
+import { activeAccounts, datasetIndex } from "@/lib/accounts";
 import { resolveCampaigns } from "@/lib/tracking";
 import { supabaseAdmin } from "@/lib/supabase";
 import { isAuthed } from "@/lib/auth";
@@ -59,22 +61,62 @@ export async function GET(req: NextRequest) {
   }[] = [];
 
   try {
-    const { cutoff, states, tracked } = await resolveCampaigns(db, await listCampaigns());
+    // Every connected ad account, each with the dataset Meta confirmed is
+    // connected to it. The rule lives in lib/accounts.ts so that this route and
+    // the campaigns route can never disagree about which accounts are live -
+    // two copies of one rule is exactly how the last silent bug happened.
+    const { scopes: accounts, skipped: skippedAccounts } = await activeAccounts(db);
+    for (const s of skippedAccounts) {
+      console.warn(`[sync] ad account ${s.adAccountId} skipped: ${s.reason}`);
+    }
+
+    // Campaign ids are unique across Meta, so one map is enough to send each
+    // campaign's leads, insights and events back to its own account's dataset.
+    const scopeOf = new Map<string, AccountScope>();
+    const everyCampaign = [];
+    for (const acc of accounts) {
+      try {
+        const cs = await listCampaigns(acc);
+        for (const c of cs) scopeOf.set(c.id, acc);
+        everyCampaign.push(...cs);
+      } catch (err) {
+        perCampaign.push({
+          campaign: `(account ${acc.name || acc.adAccountId})`,
+          ads: 0, found: 0, inserted: 0,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    const { cutoff, states, tracked } = await resolveCampaigns(db, everyCampaign);
 
     // The lead object carries form_id but not the form's title, and the title
     // is what the dashboard shows. One paged call for the whole Page, resolved
     // once per run rather than once per lead.
     const formIdsSeen = new Set<string>();
     const formNames = new Map<string, string>();
-    if (tracked.length > 0) {
+    for (const acc of tracked.length > 0 ? accounts : []) {
       try {
-        for (const f of await listLeadForms()) formNames.set(f.id, f.name);
+        for (const f of await listLeadForms(acc)) formNames.set(f.id, f.name);
       } catch {
         // A missing form title is cosmetic — never fail a sync over it.
       }
     }
 
     for (const campaign of tracked) {
+      // Which account this campaign belongs to is not a guess. If it is somehow
+      // unknown, the campaign is skipped and said so: picking "the first
+      // account" would send its events to another account's dataset, and Meta
+      // answers that with a 200 and attributes nothing.
+      const scope = scopeOf.get(campaign.id);
+      if (!scope) {
+        perCampaign.push({
+          campaign: campaign.name,
+          ads: 0, found: 0, inserted: 0,
+          error: "no connected ad account owns this campaign - skipped rather than guessed",
+        });
+        continue;
+      }
       try {
         // One watermark per campaign, not per ad: a campaign's ads share a
         // timeline, and this keeps it to a single query however many ads run.
@@ -92,14 +134,14 @@ export async function GET(req: NextRequest) {
           }
         }
 
-        const ads = await listCampaignAds(campaign.id);
+        const ads = await listCampaignAds(campaign.id, scope);
         adsSeen += ads.length;
 
         const rows: Record<string, unknown>[] = [];
         let found = 0;
 
         for (const ad of ads) {
-          const raw = await fetchAdLeads(ad.id, since);
+          const raw = await fetchAdLeads(ad.id, since, scope);
           found += raw.length;
 
           for (const lead of raw) {
@@ -108,7 +150,8 @@ export async function GET(req: NextRequest) {
               lead_id: lead.id,
               form_id: lead.form_id ?? null,
               form_name: (lead.form_id && formNames.get(lead.form_id)) || null,
-              page_id: process.env.META_PAGE_ID,
+              page_id: scope.pageId || process.env.META_PAGE_ID,
+              ad_account_id: scope.adAccountId,
               // Names come from the walk, so they are right even when Meta
               // omits them from the lead object.
               ad_id: ad.id,
@@ -133,7 +176,7 @@ export async function GET(req: NextRequest) {
         for (const r of rows) if (r.form_id) formIdsSeen.add(String(r.form_id));
 
         if (rows.length === 0) {
-          const spend = await refreshInsights(db, campaign.id, campaign.created_time).then(
+          const spend = await refreshInsights(db, campaign.id, campaign.created_time, scope).then(
             (r) => {
               insightsRows += r.rows;
               return r.spend;
@@ -159,7 +202,7 @@ export async function GET(req: NextRequest) {
           ads: ads.length,
           found,
           inserted: n,
-          spend: await refreshInsights(db, campaign.id, campaign.created_time).then(
+          spend: await refreshInsights(db, campaign.id, campaign.created_time, scope).then(
             (r) => {
               insightsRows += r.rows;
               return r.spend;
@@ -206,7 +249,7 @@ export async function GET(req: NextRequest) {
     // the only record of what a scheduled sync did is the HTTP status, and a
     // sync that sent nothing looks exactly like one that sent everything.
     console.log(
-      `[sync] campaigns=${tracked.length}/${states.length} ads=${adsSeen} ` +
+      `[sync] accounts=${accounts.length} campaigns=${tracked.length}/${states.length} ads=${adsSeen} ` +
         `leads=${leadsFound} new=${leadsNew} stageEvents=${stageEvents} ` +
         `insights=${insightsRows} forms=${formsStored} ` +
         `crm=${crm.skipped ?? `${crm.matched}/${crm.scanned} matched, ${crm.changed} moved, ${crm.owners} owners, ${crm.notes} notes`}`
@@ -215,6 +258,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       ok: true,
       cutoff,
+      accounts: accounts.map((a) => ({ id: a.adAccountId, name: a.name, dataset: a.datasetId })),
       campaignsTotal: states.length,
       campaignsTracked: tracked.length,
       adsSeen,
@@ -246,25 +290,27 @@ export async function GET(req: NextRequest) {
 async function refreshInsights(
   db: ReturnType<typeof supabaseAdmin>,
   campaignId: string,
-  createdTime?: string
+  createdTime?: string,
+  scope?: AccountScope
 ): Promise<{ rows: number; spend: number }> {
   // Campaign level FIRST, because that is the number the dashboard reports.
   // It is taken from Meta verbatim rather than added up from the ad rows —
   // reach is deduplicated people, so adding it double-counts anyone who saw
   // two ads, and that is exactly how a dashboard starts disagreeing with
   // Ads Manager.
-  const campaign = await fetchCampaignInsights(campaignId, createdTime);
+  const campaign = await fetchCampaignInsights(campaignId, createdTime, scope);
   if (campaign) {
-    const { error } = await db
-      .from("campaign_insights")
-      .upsert({ ...campaign, updated_at: new Date().toISOString() }, { onConflict: "campaign_id" });
+    const { error } = await db.from("campaign_insights").upsert(
+      { ...campaign, ad_account_id: scope?.adAccountId ?? null, updated_at: new Date().toISOString() },
+      { onConflict: "campaign_id" }
+    );
     if (error) throw new Error(error.message);
   }
 
-  const ads = await fetchCampaignAdInsights(campaignId, createdTime);
+  const ads = await fetchCampaignAdInsights(campaignId, createdTime, scope);
   if (ads.length > 0) {
     const { error } = await db.from("ad_insights").upsert(
-      ads.map((i) => ({ ...i, updated_at: new Date().toISOString() })),
+      ads.map((i) => ({ ...i, ad_account_id: scope?.adAccountId ?? null, updated_at: new Date().toISOString() })),
       { onConflict: "ad_id" }
     );
     if (error) throw new Error(error.message);
@@ -346,7 +392,7 @@ async function sendMissingStageEvents(
 
   const { data: recent, error: leadErr } = await db
     .from("leads")
-    .select("lead_id, phone, email, status, deal_value")
+    .select("lead_id, phone, email, status, deal_value, ad_account_id")
     .gte("submitted_at", sevenDaysAgo)
     .order("submitted_at", { ascending: false })
     .limit(limit);
@@ -379,6 +425,7 @@ async function sendMissingStageEvents(
     email: string | null;
     status: Status;
     deal_value: number | null;
+    ad_account_id: string | null;
   }[]) {
     // One shared definition — see chainFor. This used to be spelled out here
     // and it was missing the `rank >= 1` bound, so every qualified lead was
@@ -389,6 +436,7 @@ async function sendMissingStageEvents(
       if (missing.length >= maxEvents) return;
       if (done.has(capiEventId(lead.lead_id, st.event as string))) return;
       missing.push({
+        adAccountId: lead.ad_account_id ?? null,
         leadId: lead.lead_id,
         eventName: st.event as string,
         // Now, not the submission time: "when the lead was received and
@@ -412,14 +460,60 @@ async function sendMissingStageEvents(
   );
   if (missing.length === 0) return 0;
 
-  const result = await sendLeadEvents(missing).catch((err) => {
-    console.error("[sync] stage events failed", err);
-    return { attempted: 0, sent: 0, failed: missing.length };
-  });
-  console.log(
-    `[sync] stage events attempted=${result.attempted} sent=${result.sent} failed=${result.failed}`
-  );
-  return result.sent;
+  // Grouped by account, because a lead's events belong in the dataset connected
+  // to the account that produced it. One dataset for everything would be
+  // accepted by Meta and attributed to nothing for every account but one.
+  const { scopes } = await activeAccounts(db);
+  const datasetOf = datasetIndex(scopes);
+
+  const groups = new Map<string, typeof missing>();
+  const withheld: string[] = [];
+
+  for (const ev of missing) {
+    if (!ev.adAccountId) {
+      // Stored before the accounts table existed and never re-synced. The
+      // environment's dataset is the only account it could have come from.
+      const bucket = groups.get("") ?? [];
+      bucket.push(ev);
+      groups.set("", bucket);
+      continue;
+    }
+
+    const dataset = datasetOf.get(ev.adAccountId);
+    if (!dataset) {
+      // The lead's account is disconnected, paused, or unverified. Sending
+      // anyway means sending to SOME OTHER account's dataset - accepted with a
+      // 200, attributed to nothing, and invisible. Held instead, and named.
+      withheld.push(ev.adAccountId);
+      continue;
+    }
+
+    const bucket = groups.get(dataset) ?? [];
+    bucket.push(ev);
+    groups.set(dataset, bucket);
+  }
+
+  if (withheld.length > 0) {
+    console.warn(
+      `[sync] stage sweep: held ${withheld.length} event(s) whose ad account is not active - ` +
+        `${[...new Set(withheld)].join(", ")}. Reconnect the account to release them.`
+    );
+  }
+
+  let sent = 0, attempted = 0, failed = 0;
+  for (const [datasetId, batch] of groups) {
+    const result = await sendLeadEvents(batch, 100, datasetId || undefined).catch((err) => {
+      console.error("[sync] stage events failed", err);
+      return { attempted: 0, sent: 0, failed: batch.length };
+    });
+    attempted += result.attempted; sent += result.sent; failed += result.failed;
+    console.log(
+      `[sync] stage events dataset=${datasetId || "(env default)"} ` +
+        `attempted=${result.attempted} sent=${result.sent} failed=${result.failed}`
+    );
+  }
+  console.log(`[sync] stage events total attempted=${attempted} sent=${sent} failed=${failed}`);
+  return sent;
 }
 
 

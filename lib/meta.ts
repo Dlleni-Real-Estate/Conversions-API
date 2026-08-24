@@ -17,60 +17,137 @@ function requireEnv(name: string): string {
 }
 
 /**
- * ── Hard scope lock ────────────────────────────────────────────────────────
- * Every CAPI event Dlleni sends goes to exactly ONE dataset:
- *   "Dlleni CRM Events" (1718089652564651)
- * which is connected to exactly ONE ad account:
- *   "dlleni ads one" (736420925136885)
+ * ── Scope ──────────────────────────────────────────────────────────────────
+ * This used to be a hard lock: one dataset, one ad account, both constants,
+ * and any other value threw at startup. The lock existed for one specific
+ * reason, and that reason has not gone away — a dataset that is NOT connected
+ * to the ad account still returns HTTP 200 and `events_received: 1`. The
+ * signal simply never reaches the account. Nothing anywhere reports it.
  *
- * A dataset that is not connected to the ad account still returns HTTP 200 and
- * `events_received: 1` — the signal simply never reaches the account. That silent
- * failure is the whole reason this check exists: a wrong META_DATASET_ID must
- * crash loudly at startup, not look like success for weeks.
+ * So supporting several accounts is not a matter of deleting the check. It is
+ * a matter of moving it from compile time to connect time: a pairing is only
+ * ever stored after asking Meta which datasets are actually connected to that
+ * account and confirming the chosen one is among them. The guarantee is the
+ * same; what changed is that Meta answers the question instead of a constant.
+ *
+ * The seed pairing is kept here as the fallback used when the ad_accounts
+ * table has not been read — the account that has been sending accepted events
+ * for days, which is the strongest verification available.
  */
-export const ALLOWED_DATASET_ID = "1718089652564651";    // Dlleni CRM Events
-export const ALLOWED_AD_ACCOUNT_ID = "736420925136885";  // dlleni ads one
+export const SEED_DATASET_ID = "1718089652564651";    // Dlleni CRM Events
+export const SEED_AD_ACCOUNT_ID = "736420925136885";  // dlleni ads one
 
-/** Datasets that exist in the business but must never receive our events. */
-const RETIRED_DATASETS: Record<string, string> = {
-  "2918655091623838": "dlleni p — web pixel, retired from this pipeline",
-  "23877785175175938": "DAMAC Riverside Pixel — dead, never received an event",
-  "624600273403733": "Damac Evenv — dead, never received an event",
-  "1359964318405226": "Dlleni - دلني Event Data — not used",
+/**
+ * One ad account and the dataset its events belong in. Every Meta call takes
+ * one of these rather than reading the environment, so two accounts can never
+ * quietly share one dataset by virtue of running in the same process.
+ */
+export type AccountScope = {
+  adAccountId: string;
+  datasetId: string;
+  pageId: string;
+  name?: string;
 };
 
-function assertAllowedDataset(datasetId: string): string {
-  if (datasetId === ALLOWED_DATASET_ID) return datasetId;
-  const reason = RETIRED_DATASETS[datasetId];
-  throw new Error(
-    `Refusing to send Conversions API events to dataset ${datasetId}` +
-      (reason ? ` (${reason})` : "") +
-      `. This deployment only writes to ${ALLOWED_DATASET_ID} (Dlleni CRM Events), ` +
-      `the dataset connected to ad account ${ALLOWED_AD_ACCOUNT_ID} (dlleni ads one). ` +
-      `Fix META_DATASET_ID in the environment.`
-  );
+/** The scope built from environment variables — the one the cron falls back to. */
+export function envScope(): AccountScope {
+  return {
+    adAccountId: (process.env.META_AD_ACCOUNT_ID || SEED_AD_ACCOUNT_ID).replace(/^act_/, ""),
+    datasetId: process.env.META_DATASET_ID || SEED_DATASET_ID,
+    pageId: requireEnv("META_PAGE_ID"),
+  };
 }
 
-function assertAllowedAdAccount(): void {
-  const id = (process.env.META_AD_ACCOUNT_ID || "").replace(/^act_/, "");
-  if (id && id !== ALLOWED_AD_ACCOUNT_ID) {
-    throw new Error(
-      `Refusing to run against ad account ${id}. This deployment is locked to ` +
-        `${ALLOWED_AD_ACCOUNT_ID} (dlleni ads one). Fix META_AD_ACCOUNT_ID.`
+/**
+ * The datasets Meta says are connected to this ad account, straight from
+ * /act_<id>/adspixels. An empty array is the answer that matters most: it
+ * means no dataset is assigned, so any events sent for this account would be
+ * accepted and then attributed to nothing.
+ */
+export async function datasetsForAccount(adAccountId: string): Promise<{ id: string; name?: string }[]> {
+  const { token } = metaConfig();
+  const id = adAccountId.replace(/^act_/, "");
+  const json = await graph<{ data?: { id: string; name?: string }[] }>(
+    `/act_${id}/adspixels`,
+    { fields: "id,name", limit: "50" },
+    token
+  );
+  return json.data ?? [];
+}
+
+/** Every ad account this token can see, for the connect screen's picker. */
+export async function listAdAccounts(): Promise<
+  { id: string; name?: string; currency?: string; status?: number }[]
+> {
+  const { token } = metaConfig();
+  const json = await graph<{ data?: { account_id: string; name?: string; currency?: string; account_status?: number }[] }>(
+    "/me/adaccounts",
+    { fields: "account_id,name,currency,account_status", limit: "100" },
+    token
+  );
+  return (json.data ?? []).map((a) => ({
+    id: a.account_id, name: a.name, currency: a.currency, status: a.account_status,
+  }));
+}
+
+/**
+ * The Pages this ad account is allowed to advertise for.
+ *
+ * This matters more than it looks. Lead retrieval is a PAGE-scoped edge: the
+ * leads of an ad are read with the token of the Page that owns the form, not
+ * the ad account's. Pair a second ad account with the first account's Page and
+ * every campaign lists fine, every insight reports fine, and zero leads ever
+ * arrive - with no error to explain it. So the Page is asked for at connect
+ * time and stored per account instead of inherited from the environment.
+ */
+export async function pagesForAccount(adAccountId: string): Promise<{ id: string; name?: string }[]> {
+  const { token } = metaConfig();
+  const id = adAccountId.replace(/^act_/, "");
+  try {
+    const json = await graph<{ data?: { id: string; name?: string }[] }>(
+      `/act_${id}/promote_pages`,
+      { fields: "id,name", limit: "50" },
+      token
     );
+    return json.data ?? [];
+  } catch {
+    // Some tokens cannot read this edge. Not fatal: the picker falls back to
+    // the environment's Page, which is right for a single-Page business.
+    return [];
   }
 }
 
-export const metaConfig = () => {
-  assertAllowedAdAccount();
+/**
+ * Is this pairing real? The one question the old constant answered by fiat.
+ * Returns the dataset's name when it checks out, so the caller can store it.
+ */
+export async function verifyPairing(
+  adAccountId: string,
+  datasetId: string
+): Promise<{ ok: true; datasetName?: string } | { ok: false; error: string; available: { id: string; name?: string }[] }> {
+  const available = await datasetsForAccount(adAccountId);
+  const match = available.find((d) => d.id === datasetId);
+  if (match) return { ok: true, datasetName: match.name };
   return {
-    token: requireEnv("META_ACCESS_TOKEN"),
-    pageId: requireEnv("META_PAGE_ID"),
-    datasetId: assertAllowedDataset(requireEnv("META_DATASET_ID")),
-    adAccountId: ALLOWED_AD_ACCOUNT_ID,
-    testEventCode: process.env.META_TEST_EVENT_CODE || undefined,
+    ok: false,
+    available,
+    error:
+      available.length === 0
+        ? `Ad account ${adAccountId} has no dataset connected to it. Assign one in Meta Business Settings ` +
+          `(Data sources > Datasets > Connected assets > Add ad account) before connecting it here — until then ` +
+          `Meta would accept every event for this account and attribute it to nothing.`
+        : `Dataset ${datasetId} is not connected to ad account ${adAccountId}. Connected: ` +
+          available.map((d) => `${d.id}${d.name ? ` (${d.name})` : ""}`).join(", "),
   };
-};
+}
+
+export const metaConfig = () => ({
+  token: requireEnv("META_ACCESS_TOKEN"),
+  pageId: process.env.META_PAGE_ID || "",
+  datasetId: process.env.META_DATASET_ID || SEED_DATASET_ID,
+  adAccountId: (process.env.META_AD_ACCOUNT_ID || SEED_AD_ACCOUNT_ID).replace(/^act_/, ""),
+  testEventCode: process.env.META_TEST_EVENT_CODE || undefined,
+});
 
 type GraphError = { error?: { message?: string; code?: number; error_subcode?: number; fbtrace_id?: string } };
 
@@ -93,11 +170,15 @@ async function graph<T>(path: string, params: Record<string, string>, token: str
 }
 
 // ── Page access token (cached for the life of the lambda instance) ──────────
-let pageTokenCache: { pageId: string; token: string } | null = null;
+// Keyed by pageId: two accounts can own different Pages, and a token cached
+// for one Page is useless (and confusing) for the other.
+const pageTokenCache = new Map<string, string>();
 
-export async function getPageToken(): Promise<string> {
-  const { token, pageId } = metaConfig();
-  if (pageTokenCache?.pageId === pageId) return pageTokenCache.token;
+export async function getPageToken(scope?: AccountScope): Promise<string> {
+  const { token } = metaConfig();
+  const pageId = scope?.pageId || metaConfig().pageId;
+  const cached = pageTokenCache.get(pageId);
+  if (cached) return cached;
 
   const data = await graph<{ access_token?: string }>(`/${pageId}`, { fields: "access_token" }, token);
   if (!data.access_token) {
@@ -106,16 +187,16 @@ export async function getPageToken(): Promise<string> {
         `System User with Full control, and make sure the token has pages_show_list + pages_manage_ads.`
     );
   }
-  pageTokenCache = { pageId, token: data.access_token };
+  pageTokenCache.set(pageId, data.access_token);
   return data.access_token;
 }
 
 // ── Lead forms ──────────────────────────────────────────────────────────────
 export type LeadForm = { id: string; name: string; status?: string; leads_count?: number };
 
-export async function listLeadForms(): Promise<LeadForm[]> {
-  const pageToken = await getPageToken();
-  const { pageId } = metaConfig();
+export async function listLeadForms(scope?: AccountScope): Promise<LeadForm[]> {
+  const pageToken = await getPageToken(scope);
+  const pageId = scope?.pageId || metaConfig().pageId;
   const out: LeadForm[] = [];
   let after: string | undefined;
 
@@ -156,8 +237,8 @@ const LEAD_FIELDS =
  * Pull leads for one form. `since` is a unix timestamp (seconds) — we only ask
  * Meta for leads newer than what we already stored, so the cron stays cheap.
  */
-export async function fetchFormLeads(formId: string, since?: number): Promise<RawLead[]> {
-  const pageToken = await getPageToken();
+export async function fetchFormLeads(formId: string, since?: number, scope?: AccountScope): Promise<RawLead[]> {
+  const pageToken = await getPageToken(scope);
   const out: RawLead[] = [];
   let after: string | undefined;
 
@@ -251,10 +332,19 @@ export type Campaign = {
   status?: string;
   effective_status?: string;
   objective?: string;
+  /**
+   * Which account this campaign was listed from. Stamped here rather than
+   * inferred later: once campaigns from two accounts are in one array, nothing
+   * else in the row says where it came from, and routing a lead's events to the
+   * wrong account's dataset is the one mistake Meta accepts without complaint.
+   */
+  ad_account_id?: string;
+  account_name?: string;
 };
 
-export async function listCampaigns(): Promise<Campaign[]> {
-  const { token, adAccountId } = metaConfig();
+export async function listCampaigns(scope?: AccountScope): Promise<Campaign[]> {
+  const { token } = metaConfig();
+  const adAccountId = scope?.adAccountId || metaConfig().adAccountId;
   const out: Campaign[] = [];
   let after: string | undefined;
 
@@ -274,7 +364,7 @@ export async function listCampaigns(): Promise<Campaign[]> {
   } while (after);
 
   out.sort((a, b) => (a.created_time < b.created_time ? 1 : -1));
-  return out;
+  return out.map((c) => ({ ...c, ad_account_id: adAccountId, account_name: scope?.name }));
 }
 
 export type CampaignAd = { id: string; name: string; adset_id?: string; adset_name?: string };
@@ -284,7 +374,7 @@ export type CampaignAd = { id: string; name: string; adset_id?: string; adset_na
  * that only ever belonged to a deleted ad will not be picked up — acceptable,
  * since a deleted ad is not a campaign anyone is still optimising.
  */
-export async function listCampaignAds(campaignId: string): Promise<CampaignAd[]> {
+export async function listCampaignAds(campaignId: string, _scope?: AccountScope): Promise<CampaignAd[]> {
   const { token } = metaConfig();
   const out: CampaignAd[] = [];
   let after: string | undefined;
@@ -307,8 +397,8 @@ export async function listCampaignAds(campaignId: string): Promise<CampaignAd[]>
 }
 
 /** Leads for one ad. Page-scoped edge, so it needs the Page token like forms do. */
-export async function fetchAdLeads(adId: string, since?: number): Promise<RawLead[]> {
-  const pageToken = await getPageToken();
+export async function fetchAdLeads(adId: string, since?: number, scope?: AccountScope): Promise<RawLead[]> {
+  const pageToken = await getPageToken(scope);
   const out: RawLead[] = [];
   let after: string | undefined;
 
@@ -344,18 +434,23 @@ export async function fetchAdLeads(adId: string, since?: number): Promise<RawLea
 // we ask for the whole span in one call: reach deduplicates people across days
 // as well as across ads, so two calls added together would overstate it again.
 
-let timezoneCache: string | null = null;
+// Keyed by account: two ad accounts can sit in different timezones, and a
+// date window computed in the wrong one silently shifts every insight by a day.
+const timezoneCache = new Map<string, string>();
 
-async function accountTimezone(): Promise<string> {
-  if (timezoneCache) return timezoneCache;
-  const { token, adAccountId } = metaConfig();
+async function accountTimezone(scope?: AccountScope): Promise<string> {
+  const { token } = metaConfig();
+  const adAccountId = scope?.adAccountId || metaConfig().adAccountId;
+  const hit = timezoneCache.get(adAccountId);
+  if (hit) return hit;
   const data = await graph<{ timezone_name?: string }>(
     `/act_${adAccountId}`,
     { fields: "timezone_name" },
     token
   );
-  timezoneCache = data.timezone_name || "UTC";
-  return timezoneCache;
+  const tz = data.timezone_name || "UTC";
+  timezoneCache.set(adAccountId, tz);
+  return tz;
 }
 
 /** YYYY-MM-DD in a given timezone. en-CA is the locale that formats that way. */
@@ -369,8 +464,11 @@ function ymd(tz: string, date: Date): string {
 }
 
 /** Campaign creation (or three years back) through today, account time. */
-async function insightsWindow(sinceIso?: string): Promise<{ since: string; until: string }> {
-  const tz = await accountTimezone();
+async function insightsWindow(sinceIso?: string, scope?: AccountScope): Promise<{ since: string; until: string }> {
+  // The window is computed in the OWNING account's timezone. Two accounts in
+  // different zones would otherwise have one of them shifted by a day, which
+  // reads as a spend discrepancy nobody can explain.
+  const tz = await accountTimezone(scope);
   const now = new Date();
   const fallback = new Date(now.getTime() - 1000 * 60 * 60 * 24 * 365 * 3); // inside Meta's 37-month limit
   const start = sinceIso && !Number.isNaN(Date.parse(sinceIso)) ? new Date(sinceIso) : fallback;
@@ -475,14 +573,15 @@ export type CampaignInsight = Omit<AdInsight, "ad_id" | "ad_name" | "adset_id" |
  */
 export async function fetchCampaignInsights(
   campaignId: string,
-  createdTime?: string
+  createdTime?: string,
+  scope?: AccountScope
 ): Promise<CampaignInsight | null> {
   const { token } = metaConfig();
   const page: { data: InsightRow[] } = await graph(
     `/${campaignId}/insights`,
     {
       level: "campaign",
-      time_range: JSON.stringify(await insightsWindow(createdTime)),
+      time_range: JSON.stringify(await insightsWindow(createdTime, scope)),
       limit: "1",
       fields:
         "campaign_id,campaign_name,spend,impressions,reach,frequency,clicks,inline_link_clicks," +
@@ -516,12 +615,13 @@ export async function fetchCampaignInsights(
 
 export async function fetchCampaignAdInsights(
   campaignId: string,
-  createdTime?: string
+  createdTime?: string,
+  scope?: AccountScope
 ): Promise<AdInsight[]> {
   const { token } = metaConfig();
   const out: AdInsight[] = [];
   let after: string | undefined;
-  const window = await insightsWindow(createdTime);
+  const window = await insightsWindow(createdTime, scope);
 
   do {
     const page: { data: InsightRow[]; paging?: { cursors?: { after?: string }; next?: string } } = await graph(
@@ -591,7 +691,7 @@ export type FormSchema = {
   questions: FormQuestion[];
 };
 
-export async function fetchFormSchema(formId: string): Promise<FormSchema> {
+export async function fetchFormSchema(formId: string, scope?: AccountScope): Promise<FormSchema> {
   const pageToken = await getPageToken();
   const data = await graph<{ id: string; name?: string; locale?: string; questions?: FormQuestion[] }>(
     `/${formId}`,

@@ -109,6 +109,13 @@ export async function GET(req: NextRequest) {
   const metaLeads = sum("meta_leads");
   const currency = ci.find((r) => r.currency)?.currency ?? "EGP";
 
+  // With more than one ad account, spend can arrive in more than one currency.
+  // Adding those is meaningless, so the fact is reported rather than hidden:
+  // the totals still add (they have to add to something), and the dashboard
+  // says out loud that they are mixed instead of printing a confident number.
+  const currencies = [...new Set(ci.map((r) => r.currency).filter(Boolean))] as string[];
+  const mixedCurrency = currencies.length > 1;
+
   const meta = {
     spend,
     impressions,
@@ -274,6 +281,7 @@ export async function GET(req: NextRequest) {
         campaign_id: id,
         campaign_name:
           insight?.campaign_name ?? mine.find((l) => l.campaign_name)?.campaign_name ?? id,
+        ad_account_id: (insight as { ad_account_id?: string } | null)?.ad_account_id ?? null,
         spend: money(spendHere),
         meta_leads: insight ? Number(insight.meta_leads) : 0,
         leads: mine.length,
@@ -295,6 +303,8 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     ok: true,
     currency,
+    currencies,
+    mixedCurrency,
     scope: scoped,
     campaigns,
     // Verbatim from Meta — nothing here is derived from our own lead table.

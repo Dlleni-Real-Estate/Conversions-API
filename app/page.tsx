@@ -6,6 +6,7 @@ import LeadPanel from "@/components/LeadPanel";
 import AnalyticsView from "@/components/AnalyticsView";
 import CampaignSettings from "@/components/CampaignSettings";
 import HealthPanel from "@/components/HealthPanel";
+import AdAccounts from "@/components/AdAccounts";
 import { LangProvider, LangSwitch, useLang } from "@/components/LangProvider";
 import type { FormDictionary } from "@/lib/labels";
 import type { Analytics, Lead } from "@/components/types";
@@ -252,6 +253,7 @@ function Dashboard() {
         {tab === "settings" && (
           <div className="space-y-6">
             <HealthPanel pw={pw} />
+            <AdAccounts pw={pw} />
             <CampaignSettings pw={pw} />
           </div>
         )}

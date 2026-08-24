@@ -71,6 +71,12 @@ export default function AnalyticsView({
 
   return (
     <div className="space-y-6">
+      {data.mixedCurrency && (
+        <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs leading-relaxed text-amber-800">
+          {t.mixedCurrency(data.currencies?.join(" · ") || "")}
+        </p>
+      )}
+
       {/* ── Campaigns side by side ────────────────────────────────────────
           Only rendered on the all-campaigns view — inside one campaign it
           would just restate the headline. Row click narrows the whole page. */}

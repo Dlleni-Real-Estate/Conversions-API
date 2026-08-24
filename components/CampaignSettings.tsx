@@ -13,7 +13,12 @@ export type CampaignState = {
   objective?: string;
   tracked: boolean;
   reason: "manual-on" | "manual-off" | "auto-new" | "auto-old";
+  ad_account_id?: string;
+  account_name?: string;
 };
+
+type AccountNote = { ad_account_id: string; name?: string; error?: string };
+type SkippedAccount = { ad_account_id: string; name?: string; reason: string };
 
 const REASON: Record<CampaignState["reason"], { tk: "rAuto" | "rBefore" | "rPinnedOn" | "rPinnedOff"; className: string }> = {
   "auto-new": { tk: "rAuto", className: "border-emerald-200 bg-emerald-50 text-emerald-700" },
@@ -30,8 +35,13 @@ export default function CampaignSettings({ pw }: { pw: string }) {
   const [err, setErr] = useState<string | null>(null);
   const [cutoff, setCutoff] = useState("");
   const [campaigns, setCampaigns] = useState<CampaignState[]>([]);
+  const [accounts, setAccounts] = useState<AccountNote[]>([]);
+  const [skipped, setSkipped] = useState<SkippedAccount[]>([]);
 
-  const apply = useCallback((json: { ok?: boolean; error?: string; cutoff?: string; campaigns?: CampaignState[] }) => {
+  const apply = useCallback((json: {
+    ok?: boolean; error?: string; cutoff?: string; campaigns?: CampaignState[];
+    accounts?: AccountNote[]; skippedAccounts?: SkippedAccount[];
+  }) => {
     if (!json.ok) {
       setErr(json.error || "Error");
       return;
@@ -39,6 +49,8 @@ export default function CampaignSettings({ pw }: { pw: string }) {
     setErr(null);
     if (json.cutoff) setCutoff(toDateInput(json.cutoff));
     setCampaigns(json.campaigns || []);
+    setAccounts(json.accounts || []);
+    setSkipped(json.skippedAccounts || []);
   }, []);
 
   const load = useCallback(async () => {
@@ -74,6 +86,9 @@ export default function CampaignSettings({ pw }: { pw: string }) {
   }
 
   const trackedCount = campaigns.filter((c) => c.tracked).length;
+  // The account badge is noise on a single-account setup and essential on two,
+  // where the same campaign name can exist twice.
+  const multiAccount = new Set(campaigns.map((c) => c.ad_account_id).filter(Boolean)).size > 1;
 
   return (
     <Card
@@ -108,6 +123,19 @@ export default function CampaignSettings({ pw }: { pw: string }) {
 
       {err && <p className="px-5 pt-3 text-sm text-red-600">{err}</p>}
 
+      {accounts.filter((a) => a.error).map((a) => (
+        <p key={a.ad_account_id} className="mx-5 mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-xs leading-relaxed text-red-700">
+          {t.campAccountFailed(a.name || a.ad_account_id)}: {a.error}
+        </p>
+      ))}
+      {skipped.map((a) => (
+        <p key={a.ad_account_id} className="mx-5 mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs leading-relaxed text-amber-800">
+          {a.reason === "unverified"
+            ? t.campAccountUnverified(a.name || a.ad_account_id)
+            : t.campAccountPaused(a.name || a.ad_account_id)}
+        </p>
+      ))}
+
       {campaigns.length === 0 ? (
         <Empty>{busy ? t.loading : t.noCampaigns}</Empty>
       ) : (
@@ -129,7 +157,14 @@ export default function CampaignSettings({ pw }: { pw: string }) {
                   <tr key={c.id} className={c.tracked ? "" : "text-slate-400"}>
                     <Td>
                       <div dir="auto" className={c.tracked ? "font-medium text-slate-900" : ""}>{c.name}</div>
-                      <div className="text-[11px] text-slate-400">{c.id}</div>
+                      <div className="text-[11px] text-slate-400">
+                        <span className="ltr-nums">{c.id}</span>
+                        {multiAccount && (c.account_name || c.ad_account_id) && (
+                          <span dir="auto" className="ms-1.5 rounded-md border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-slate-500">
+                            {c.account_name || c.ad_account_id}
+                          </span>
+                        )}
+                      </div>
                     </Td>
                     <Td>
                       <span className="text-xs">

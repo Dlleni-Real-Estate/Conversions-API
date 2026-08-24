@@ -51,6 +51,14 @@ export function capiEventId(leadId: string, eventName: string): string {
 
 export type CapiInput = {
   leadId: string;
+  /**
+   * Which ad account produced this lead. Carried so the caller can group events
+   * by account before sending — the dataset an event goes to has to be the one
+   * connected to that account, or Meta accepts it and attributes it to nothing.
+   * Null means "use the deployment default", which is right only while a single
+   * account exists.
+   */
+  adAccountId?: string | null;
   eventName: string;
   eventTime?: Date;
   phone?: string;
@@ -94,8 +102,16 @@ export function buildEvent(input: CapiInput) {
 
 export type SendResult = { ok: true; response: unknown } | { ok: false; error: string; response?: unknown };
 
-async function postEvents(events: unknown[]): Promise<SendResult> {
-  const { token, datasetId, testEventCode } = metaConfig();
+/**
+ * `datasetId` is a parameter, not a constant read from the environment, because
+ * events for one ad account must land in the dataset connected to THAT account.
+ * Sending them to another account's dataset returns HTTP 200 and
+ * events_received: 1 while attributing nothing — the failure that has no
+ * symptom. Callers pass the dataset the ad_accounts row was verified against.
+ */
+async function postEvents(events: unknown[], datasetIdOverride?: string): Promise<SendResult> {
+  const { token, testEventCode } = metaConfig();
+  const datasetId = datasetIdOverride || metaConfig().datasetId;
 
   const body: Record<string, unknown> = { data: events };
   if (testEventCode) body.test_event_code = testEventCode;
@@ -123,7 +139,7 @@ async function postEvents(events: unknown[]): Promise<SendResult> {
  * is written BEFORE the network call, so a crash mid-flight leaves a 'pending'
  * row that /api/capi/replay will pick up rather than a silently lost event.
  */
-export async function sendLeadEvent(input: CapiInput): Promise<SendResult> {
+export async function sendLeadEvent(input: CapiInput, datasetId?: string): Promise<SendResult> {
   const db = supabaseAdmin();
   const event = buildEvent(input);
   const eventTime = new Date((event.event_time as number) * 1000).toISOString();
@@ -144,7 +160,7 @@ export async function sendLeadEvent(input: CapiInput): Promise<SendResult> {
     .select("id, attempts")
     .single();
 
-  const result = await postEvents([event]);
+  const result = await postEvents([event], datasetId);
 
   if (row?.id) {
     await db
@@ -170,7 +186,7 @@ export async function sendLeadEvent(input: CapiInput): Promise<SendResult> {
  * Used for the raw-lead stage, where a backfill can mean hundreds of events and
  * one-at-a-time would time the function out.
  */
-export async function sendLeadEvents(inputs: CapiInput[], chunkSize = 100) {
+export async function sendLeadEvents(inputs: CapiInput[], chunkSize = 100, datasetId?: string) {
   if (inputs.length === 0) return { attempted: 0, sent: 0, failed: 0 };
   const db = supabaseAdmin();
   let sent = 0;
@@ -194,7 +210,7 @@ export async function sendLeadEvents(inputs: CapiInput[], chunkSize = 100) {
       { onConflict: "event_id" }
     );
 
-    const result = await postEvents(events);
+    const result = await postEvents(events, datasetId);
     const patch = {
       status: result.ok ? "sent" : "failed",
       response: "response" in result ? (result.response as object) : null,

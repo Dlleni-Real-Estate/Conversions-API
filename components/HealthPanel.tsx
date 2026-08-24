@@ -8,7 +8,14 @@ type Health = {
   ok: boolean;
   sender: "app" | "crm";
   crmConfigured: boolean;
-  dualSenderRisk: boolean;
+  senders: { app: boolean; crmApiConfigured: boolean; crmIntegrationOn: boolean | null };
+  accounts?: {
+    connected: number;
+    active: number;
+    unverified: string[];
+    paused: string[];
+    sharedDatasets: string[];
+  };
   leads: number;
   lastSync: {
     started_at: string;
@@ -62,15 +69,34 @@ export default function HealthPanel({ pw }: { pw: string }) {
   return (
     <section>
       <SectionTitle title={t.healthTitle} subtitle={t.healthSub} />
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         <Card className="p-4">
           <p className="text-xs font-medium text-slate-500">{t.hSender}</p>
           <p className="mt-1 text-lg font-semibold">
             {h.sender === "app" ? t.hSenderApp : t.hSenderCrm}
           </p>
-          {h.dualSenderRisk && (
+          {h.senders?.app && h.senders?.crmApiConfigured && (
+            <p className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-2 text-[11px] leading-relaxed text-slate-600">
+              {t.hSenderNote}
+            </p>
+          )}
+        </Card>
+
+        <Card className="p-4">
+          <p className="text-xs font-medium text-slate-500">{t.hAccounts}</p>
+          <p className="mt-1 text-lg font-semibold">
+            {h.accounts?.active ?? 0}
+            <span className="text-sm font-normal text-slate-500"> / {h.accounts?.connected ?? 0}</span>
+          </p>
+          <p className="mt-1 text-[11px] text-slate-500">{t.hAccountsSub}</p>
+          {(h.accounts?.unverified.length ?? 0) > 0 && (
             <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-[11px] leading-relaxed text-amber-800">
-              {t.hDualWarn}
+              {t.hAccUnverified}: {h.accounts?.unverified.join(", ")}
+            </p>
+          )}
+          {(h.accounts?.sharedDatasets.length ?? 0) > 0 && (
+            <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-[11px] leading-relaxed text-amber-800">
+              {t.hAccSharedDataset}
             </p>
           )}
         </Card>

@@ -69,6 +69,7 @@ export type AdRow = {
 export type CampaignBoardRow = {
   campaign_id: string;
   campaign_name: string;
+  ad_account_id?: string | null;
   spend: number;
   meta_leads: number;
   leads: number;
@@ -88,6 +89,9 @@ export type CampaignBoardRow = {
 export type Analytics = {
   ok: boolean;
   currency: string;
+  /** Every currency in scope. More than one means the totals below are mixed. */
+  currencies?: string[];
+  mixedCurrency?: boolean;
   scope: string | null;
   campaigns: { id: string; name: string }[];
   /** One row per campaign, same yardstick — present only when scope is "all". */
