@@ -57,6 +57,11 @@ export default function AdAccounts({ pw }: { pw: string }) {
   const [probing, setProbing] = useState(false);
   const [probe, setProbe] = useState<Probe | null>(null);
   const [probeErr, setProbeErr] = useState<string | null>(null);
+  // How the current probe authenticated - a Facebook Login nonce or a pasted
+  // token. Connect must use the SAME credential that listed the account.
+  const [probeAuth, setProbeAuth] = useState<
+    { kind: "nonce"; nonce: string } | { kind: "token" } | null
+  >(null);
 
   const load = useCallback(async () => {
     try {
@@ -88,33 +93,70 @@ export default function AdAccounts({ pw }: { pw: string }) {
   const connectedIds = new Set(data.connected.map((c) => c.ad_account_id));
   const notConnected = data.available.filter((a) => !connectedIds.has(a.id));
 
-  const runProbe = async () => {
-    setProbing(true);
+  const runProbeWith = useCallback(
+    async (payload: Record<string, string>, auth: { kind: "nonce"; nonce: string } | { kind: "token" }) => {
+      setProbing(true);
+      setProbeErr(null);
+      try {
+        const r = await fetch("/api/ad-accounts", {
+          method: "POST",
+          headers: { "x-app-password": pw, "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const j = await r.json();
+        if (j.ok) {
+          setProbe({
+            available: j.available ?? [],
+            datasets: j.datasets ?? {},
+            pages: j.pages ?? {},
+            pageSource: j.pageSource ?? {},
+          });
+          setProbeAuth(auth);
+        } else {
+          setProbe(null);
+          setProbeAuth(null);
+          setProbeErr(j.error || "Error");
+        }
+      } catch {
+        setProbeErr(t.connectionError);
+      } finally {
+        setProbing(false);
+      }
+    },
+    [pw, t]
+  );
+
+  const runProbe = () => runProbeWith({ probe_token: probeToken.trim() }, { kind: "token" });
+
+  const startOAuth = async () => {
     setProbeErr(null);
     try {
-      const r = await fetch("/api/ad-accounts", {
-        method: "POST",
-        headers: { "x-app-password": pw, "Content-Type": "application/json" },
-        body: JSON.stringify({ probe_token: probeToken.trim() }),
-      });
+      const r = await fetch("/api/oauth/start", { headers: { "x-app-password": pw } });
       const j = await r.json();
-      if (j.ok) {
-        setProbe({
-          available: j.available ?? [],
-          datasets: j.datasets ?? {},
-          pages: j.pages ?? {},
-          pageSource: j.pageSource ?? {},
-        });
-      } else {
-        setProbe(null);
-        setProbeErr(j.error || "Error");
-      }
+      if (j.ok && j.url) window.location.href = j.url;
+      else setProbeErr(j.error || "Error");
     } catch {
       setProbeErr(t.connectionError);
-    } finally {
-      setProbing(false);
     }
   };
+
+  // Returning from Facebook: the URL carries only a nonce (never a token).
+  // Probe with it immediately, then scrub the query string so a reload or a
+  // shared link replays nothing.
+  useEffect(() => {
+    const sp = new URLSearchParams(window.location.search);
+    const done = sp.get("oauth_done");
+    const oerr = sp.get("oauth_error");
+    if (oerr) setProbeErr(oerr);
+    if (done) runProbeWith({ oauth_nonce: done }, { kind: "nonce", nonce: done });
+    if (done || oerr) {
+      sp.delete("oauth_done");
+      sp.delete("oauth_error");
+      const qs = sp.toString();
+      window.history.replaceState(null, "", qs ? `/?${qs}` : "/");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const connectProbed = async (a: Available, dataset: string, page: string) => {
     if (!dataset) return;
@@ -128,9 +170,11 @@ export default function AdAccounts({ pw }: { pw: string }) {
           ad_account_id: a.id,
           dataset_id: dataset,
           name: a.name,
-          // The token that listed and verified this account is the token
-          // stored with it - one token per pairing, end to end.
-          access_token: probeToken.trim(),
+          // The credential that listed this account is the one that verifies
+          // and gets stored with it - one token per pairing, end to end.
+          ...(probeAuth?.kind === "nonce"
+            ? { oauth_nonce: probeAuth.nonce }
+            : { access_token: probeToken.trim() }),
           ...(page ? { page_id: page } : {}),
         }),
       });
@@ -367,7 +411,17 @@ export default function AdAccounts({ pw }: { pw: string }) {
 
       <p className="mb-2 mt-6 text-xs font-medium text-slate-500">{t.accOtherBiz}</p>
       <Card className="p-4">
-        <p className="max-w-2xl text-[11px] leading-relaxed text-slate-500">{t.accOtherBizHelp}</p>
+        <p className="max-w-2xl text-[11px] leading-relaxed text-slate-500">{t.accFbLoginSub}</p>
+        <button
+          onClick={startOAuth}
+          disabled={probing}
+          className="tap mt-3 rounded-lg bg-[#1877F2] px-4 py-2 text-xs font-semibold text-white shadow-card hover:bg-[#166FE5] disabled:opacity-40"
+        >
+          {t.accFbLogin}
+        </button>
+
+        <p className="mt-4 text-[11px] font-medium text-slate-400">{t.accOrManual}</p>
+        <p className="mt-1 max-w-2xl text-[11px] leading-relaxed text-slate-500">{t.accOtherBizHelp}</p>
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <input
             type="password"

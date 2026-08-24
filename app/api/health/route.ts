@@ -49,12 +49,12 @@ export async function GET(req: NextRequest) {
       .order("created_at", { ascending: false }).limit(1).maybeSingle(),
     db.from("app_settings").select("value").eq("key", "last_crm_sync").maybeSingle(),
     db.from("leads").select("lead_id", { count: "exact", head: true }),
-    db.from("ad_accounts").select("ad_account_id,name,dataset_id,enabled,verified_at"),
+    db.from("ad_accounts").select("ad_account_id,name,dataset_id,enabled,verified_at,token_expires_at"),
   ]);
 
   type AccountRow = {
     ad_account_id: string; name: string | null; dataset_id: string;
-    enabled: boolean; verified_at: string | null;
+    enabled: boolean; verified_at: string | null; token_expires_at: string | null;
   };
   const rows = (accountRows.data ?? []) as AccountRow[];
 
@@ -88,6 +88,12 @@ export async function GET(req: NextRequest) {
       unverified: rows.filter((a) => a.enabled && !a.verified_at)
         .map((a) => a.name || a.ad_account_id),
       paused: rows.filter((a) => !a.enabled).map((a) => a.name || a.ad_account_id),
+      // Facebook Login tokens last ~60 days. Fourteen days of warning is
+      // enough to re-login before the account silently stops syncing.
+      tokenExpiring: rows
+        .filter((a) => a.enabled && a.token_expires_at
+          && new Date(a.token_expires_at).getTime() < Date.now() + 14 * 24 * 3600_000)
+        .map((a) => `${a.name || a.ad_account_id} (${(a.token_expires_at as string).slice(0, 10)})`),
       // Two accounts pointed at one dataset is legal in Meta and almost never
       // intended: their events land in one funnel and neither optimises well.
       sharedDatasets: [

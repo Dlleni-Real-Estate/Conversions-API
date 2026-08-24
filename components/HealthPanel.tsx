@@ -15,6 +15,7 @@ type Health = {
     unverified: string[];
     paused: string[];
     sharedDatasets: string[];
+    tokenExpiring?: string[];
   };
   leads: number;
   lastSync: {
@@ -97,6 +98,11 @@ export default function HealthPanel({ pw }: { pw: string }) {
           {(h.accounts?.sharedDatasets.length ?? 0) > 0 && (
             <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-[11px] leading-relaxed text-amber-800">
               {t.hAccSharedDataset}
+            </p>
+          )}
+          {(h.accounts?.tokenExpiring?.length ?? 0) > 0 && (
+            <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-[11px] leading-relaxed text-amber-800">
+              {t.hAccTokenExpiring}: {h.accounts?.tokenExpiring?.join(", ")}
             </p>
           )}
         </Card>

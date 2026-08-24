@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 import { isAuthed } from "@/lib/auth";
 import { datasetsForAccount, listAdAccounts, pagesForAccount, verifyPairing } from "@/lib/meta";
+import { tokenExpiry, tokenForNonce } from "@/lib/oauth";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -81,13 +82,25 @@ export async function POST(req: NextRequest) {
   const db = supabaseAdmin();
   const body = (await req.json().catch(() => null)) as {
     ad_account_id?: string; dataset_id?: string; page_id?: string; name?: string; enabled?: boolean;
-    access_token?: string; probe_token?: string;
+    access_token?: string; probe_token?: string; oauth_nonce?: string;
   } | null;
+
+  // A Facebook Login hands the browser a nonce, never the token; the token
+  // sits server-side under that nonce for a few minutes. Resolving it here
+  // (behind the app password) is the only way it comes back out.
+  const oauthNonce = (body?.oauth_nonce || "").trim();
+  const nonceToken = oauthNonce ? await tokenForNonce(db, oauthNonce) : null;
+  if (oauthNonce && !nonceToken) {
+    return NextResponse.json(
+      { ok: false, error: "The Facebook sign-in expired. Sign in again and retry." },
+      { status: 400 }
+    );
+  }
 
   // Probe: "what can THIS token see?" - for connecting an account that lives
   // in another Business, whose assets the deployment token cannot list. The
   // token is used for the three read calls and returned to no one.
-  const probeToken = (body?.probe_token || "").trim();
+  const probeToken = (body?.probe_token || "").trim() || (!body?.ad_account_id && nonceToken ? nonceToken : "");
   if (probeToken) {
     try {
       const available = await listAdAccounts(probeToken);
@@ -133,7 +146,12 @@ export async function POST(req: NextRequest) {
   // the one the pairing is verified with - the same one every later call for
   // this account will use. Verifying with one token and sending with another
   // would re-open the exact hole verification exists to close.
-  const ownToken = (body?.access_token || "").trim() || null;
+  const ownToken = (body?.access_token || "").trim() || nonceToken || null;
+
+  // When this token dies, so health can warn BEFORE the account goes quiet.
+  // Null means "never" (a system user) or "could not tell" - either way, no
+  // false alarms.
+  const tokenExpiresAt = ownToken ? await tokenExpiry(ownToken) : undefined;
 
   const check = await verifyPairing(accountId, datasetId, ownToken ?? undefined).catch((err) => ({
     ok: false as const, error: err instanceof Error ? err.message : String(err), available: [],
@@ -205,7 +223,7 @@ export async function POST(req: NextRequest) {
       last_error: null,
       // Only written when provided, so re-verifying an account later without
       // re-pasting its token does not wipe the stored one.
-      ...(ownToken ? { access_token: ownToken } : {}),
+      ...(ownToken ? { access_token: ownToken, token_expires_at: tokenExpiresAt } : {}),
     },
     { onConflict: "ad_account_id" }
   );

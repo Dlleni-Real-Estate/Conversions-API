@@ -1,0 +1,129 @@
+/**
+ * Facebook Login for the connect screen.
+ *
+ * The point of this file is one property: THE TOKEN NEVER REACHES THE BROWSER.
+ * The dashboard asks /api/oauth/start for a login URL and navigates to it;
+ * Facebook sends the browser back to /api/oauth/callback with a code; the
+ * callback - which holds the app secret - turns the code into a long-lived
+ * token and parks it server-side under the state nonce; the dashboard then
+ * refers to that token by nonce through the already-authenticated
+ * /api/ad-accounts endpoint. URLs, browser history and client state only ever
+ * carry the nonce, which is worthless without the app password.
+ *
+ * Long-lived user tokens last ~60 days. token_expires_at is stored on the
+ * connection so health can warn BEFORE it lapses; reconnecting is the same
+ * two-click login again.
+ */
+
+import type { SupabaseClient } from "@supabase/supabase-js";
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type DB = SupabaseClient<any, any, any>;
+
+const GRAPH = `https://graph.facebook.com/${process.env.META_API_VERSION || "v23.0"}`;
+
+export const OAUTH_CONFIGURED = Boolean(process.env.META_APP_ID && process.env.META_APP_SECRET);
+
+/** Nonces and parked tokens live this long - enough to pick accounts, no more. */
+const TTL_MS = 15 * 60 * 1000;
+
+export function oauthScopes(): string {
+  // Everything the per-account calls make: list accounts and datasets
+  // (ads_read, business_management), resolve the Page and read its leads
+  // (pages_show_list, pages_manage_ads, leads_retrieval).
+  return "ads_read,pages_show_list,pages_manage_ads,leads_retrieval,business_management";
+}
+
+export async function createState(db: DB): Promise<string> {
+  const nonce = crypto.randomUUID().replace(/-/g, "");
+  await db.from("app_settings").upsert(
+    { key: `oauth_state:${nonce}`, value: { at: Date.now() }, updated_at: new Date().toISOString() },
+    { onConflict: "key" }
+  );
+  await purge(db);
+  return nonce;
+}
+
+/** Single use: reading the state deletes it, so a replayed callback fails. */
+export async function consumeState(db: DB, nonce: string): Promise<boolean> {
+  if (!/^[a-f0-9]{32}$/.test(nonce)) return false;
+  const { data } = await db
+    .from("app_settings").select("value").eq("key", `oauth_state:${nonce}`).maybeSingle();
+  await db.from("app_settings").delete().eq("key", `oauth_state:${nonce}`);
+  const at = (data?.value as { at?: number } | undefined)?.at;
+  return typeof at === "number" && Date.now() - at < TTL_MS;
+}
+
+export async function storeToken(db: DB, nonce: string, token: string): Promise<void> {
+  await db.from("app_settings").upsert(
+    { key: `oauth_token:${nonce}`, value: { at: Date.now(), token }, updated_at: new Date().toISOString() },
+    { onConflict: "key" }
+  );
+}
+
+/** NOT single use: one login can connect several accounts before the TTL. */
+export async function tokenForNonce(db: DB, nonce: string): Promise<string | null> {
+  if (!/^[a-f0-9]{32}$/.test(nonce)) return null;
+  const { data } = await db
+    .from("app_settings").select("value").eq("key", `oauth_token:${nonce}`).maybeSingle();
+  const v = data?.value as { at?: number; token?: string } | undefined;
+  if (!v?.token || typeof v.at !== "number" || Date.now() - v.at >= TTL_MS) return null;
+  return v.token;
+}
+
+async function purge(db: DB): Promise<void> {
+  const cutoff = new Date(Date.now() - TTL_MS).toISOString();
+  await db.from("app_settings").delete().like("key", "oauth_state:%").lt("updated_at", cutoff);
+  await db.from("app_settings").delete().like("key", "oauth_token:%").lt("updated_at", cutoff);
+}
+
+/** code -> short-lived token -> long-lived token (~60 days). */
+export async function exchangeCode(code: string, redirectUri: string): Promise<string> {
+  const clientId = process.env.META_APP_ID || "";
+  const secret = process.env.META_APP_SECRET || "";
+
+  const r = await fetch(
+    `${GRAPH}/oauth/access_token?` +
+      new URLSearchParams({ client_id: clientId, client_secret: secret, redirect_uri: redirectUri, code })
+  );
+  const j = (await r.json().catch(() => ({}))) as {
+    access_token?: string; error?: { message?: string };
+  };
+  if (!r.ok || j.error || !j.access_token) {
+    throw new Error(j.error?.message || `code exchange failed (HTTP ${r.status})`);
+  }
+
+  const r2 = await fetch(
+    `${GRAPH}/oauth/access_token?` +
+      new URLSearchParams({
+        grant_type: "fb_exchange_token", client_id: clientId, client_secret: secret,
+        fb_exchange_token: j.access_token,
+      })
+  );
+  const j2 = (await r2.json().catch(() => ({}))) as { access_token?: string };
+  // If the long-lived exchange hiccups, the short-lived token still works for
+  // the connect flow; it just expires sooner and health will say so.
+  return (r2.ok && j2.access_token) || j.access_token;
+}
+
+/**
+ * When this token dies, from Meta's own debug endpoint. Null means "no expiry"
+ * (a system-user token) or "could not tell" - debug_token can only inspect
+ * tokens minted by OUR app, so a system user generated under another Business's
+ * app comes back unknown, which is fine: unknown never triggers a false alarm.
+ */
+export async function tokenExpiry(token: string): Promise<string | null> {
+  if (!OAUTH_CONFIGURED) return null;
+  try {
+    const appToken = `${process.env.META_APP_ID}|${process.env.META_APP_SECRET}`;
+    const r = await fetch(
+      `${GRAPH}/debug_token?` + new URLSearchParams({ input_token: token, access_token: appToken })
+    );
+    const j = (await r.json().catch(() => ({}))) as { data?: { expires_at?: number } };
+    const exp = j.data?.expires_at;
+    if (typeof exp === "number" && exp > 0) return new Date(exp * 1000).toISOString();
+    return null;
+  } catch {
+    return null;
+  }
+}

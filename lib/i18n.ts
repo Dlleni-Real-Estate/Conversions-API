@@ -65,6 +65,11 @@ export const DICT = {
     accProbing: "Checking\u2026",
     accProbeNone: "This token sees no connectable ad account. Assign the ad account (and its dataset) to the token's system user in that Business, then check again.",
     accOwnToken: "own token",
+    accFbLogin: "Connect with Facebook",
+    accFbLoginSub:
+      "The fast path: sign in with the Facebook account that manages the other Business, approve once, and its ad accounts appear here ready to connect. The sign-in lives on this server only \u2014 it is never shown, never in a URL. Tokens from this path last ~60 days; the health card warns two weeks before one lapses, and re-connecting is the same two clicks.",
+    accOrManual: "Or with a manually generated token \u2014 it never expires, but takes setup:",
+    hAccTokenExpiring: "Sign-in expiring soon \u2014 reconnect with Facebook Login before it lapses",
     mixedCurrency: (list: string) =>
       `Spend here comes from ad accounts in different currencies (${list}). The totals add the raw numbers, so read them per campaign rather than as one figure.`,
     campAccountFailed: (n: string) => `Could not read campaigns from ${n}`,
@@ -295,6 +300,11 @@ export const DICT = {
     accProbing: "بيفحص\u2026",
     accProbeNone: "التوكن ده مش شايف أي حساب إعلانات ينفع يتربط. عيّن حساب الإعلانات (والداتاسِت بتاعه) للـsystem user بتاع التوكن في الـBusiness ده، وافحص تاني.",
     accOwnToken: "توكن خاص",
+    accFbLogin: "اربط بحساب فيسبوك",
+    accFbLoginSub:
+      "الطريقة السريعة: سجّل دخول بحساب الفيسبوك اللي بيدير الـBusiness التاني، اعمل موافقة مرة واحدة، وحساباته الإعلانية هتظهر هنا جاهزة للربط. تسجيل الدخول بيتخزن على السيرفر بس \u2014 مش بيظهر ولا بيعدي في أي لينك. التوكن من الطريق ده بيعيش حوالي 60 يوم؛ كارت الصحة بينبّهك قبل ما يخلص بأسبوعين، وإعادة الربط هي نفس الضغطتين.",
+    accOrManual: "أو بتوكن معمول يدوي \u2014 مبيخلصش أبداً، بس محتاج خطوات:",
+    hAccTokenExpiring: "تسجيل دخول قرب يخلص \u2014 اعمل ربط بفيسبوك تاني قبل ما يقف",
     mixedCurrency: (list: string) =>
       `المصروف هنا جاي من حسابات إعلانات بعملات مختلفة (${list}). الإجماليات بتجمع الأرقام زي ما هي، فاقراها لكل كمبين لوحدها مش كرقم واحد.`,
     campAccountFailed: (n: string) => `معرفناش نقرا كمبينات ${n}`,
