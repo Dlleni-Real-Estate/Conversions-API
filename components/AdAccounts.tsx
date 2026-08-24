@@ -321,6 +321,15 @@ export default function AdAccounts({ pw }: { pw: string }) {
                     {t.accOwnToken}
                   </span>
                 )}
+                <span
+                  className={`ms-2 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+                    c.enabled
+                      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                      : "border-slate-300 bg-slate-100 text-slate-500"
+                  }`}
+                >
+                  {c.enabled ? t.accOn : t.accOff}
+                </span>
               </p>
               <p className="mt-0.5 text-[11px] text-slate-500">
                 <span className="ltr-nums">{c.ad_account_id}</span>
@@ -340,11 +349,11 @@ export default function AdAccounts({ pw }: { pw: string }) {
                 disabled={busy === c.ad_account_id}
                 className={`tap rounded-lg border px-3 py-1.5 text-xs font-medium shadow-card disabled:opacity-40 ${
                   c.enabled
-                    ? "border-emerald-300 bg-emerald-50 text-emerald-700"
-                    : "border-slate-300 bg-white text-slate-500"
+                    ? "border-slate-300 bg-white text-slate-600 hover:bg-slate-50"
+                    : "border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
                 }`}
               >
-                {c.enabled ? t.accOn : t.accOff}
+                {c.enabled ? t.accPause : t.accResume}
               </button>
               <button
                 onClick={() => call("DELETE", undefined, `?ad_account_id=${c.ad_account_id}`)}
