@@ -234,6 +234,45 @@ export function rankOf(status: Status): number {
   return STAGE_BY_STATUS[status]?.rank ?? 0;
 }
 
+/**
+ * Every event a lead at `status` owes Meta, in the order it walked them.
+ *
+ * ONE definition, used by both senders. It was written twice before — the
+ * single-move route and the catch-up sweep — and the two drifted, which is how
+ * the bug below shipped without anything looking wrong.
+ *
+ * RawLead always comes first: Meta wants one per lead as the funnel's
+ * denominator, and every stage's conversion rate is measured against it.
+ *
+ * A POSITIVE stage implies every positive stage beneath it — a lead at "site
+ * visit done" was necessarily contacted and qualified first, and Meta credits
+ * a lead with reaching a stage only when that stage's own event arrives.
+ *
+ * A NEGATIVE stage implies nothing but itself. "No answer" says nothing about
+ * whether anyone qualified them.
+ *
+ * The `rank >= 1` lower bound is the entire point of this function. Without
+ * it, `rank <= reached` is also true of every negative stage (NoAnswer at -1,
+ * Disqualified at -2) for any lead with positive progress — so the best leads
+ * get reported to Meta as the worst ones as well. Nothing downstream reads as
+ * broken when that happens: the events send cleanly, Meta accepts them, and
+ * the optimiser quietly learns the opposite of the truth.
+ */
+export function chainFor(status: Status): StageDef[] {
+  const rawLead = STAGE_BY_STATUS.new;          // rank 0, the denominator
+  const reached = rankOf(status);
+
+  if (reached > 0) {
+    const climbed = STAGES.filter((s) => s.event && s.rank >= 1 && s.rank <= reached)
+      .sort((a, b) => a.rank - b.rank);
+    return [rawLead, ...climbed];
+  }
+  if (reached === 0) return [rawLead];
+
+  const self = STAGE_BY_STATUS[status];
+  return self?.event ? [rawLead, self] : [rawLead];
+}
+
 /** Has this lead reached `stage` — now, or by passing through it earlier? */
 export function hasReached(status: Status, stage: Status): boolean {
   const r = rankOf(status);

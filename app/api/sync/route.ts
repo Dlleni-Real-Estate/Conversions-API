@@ -14,7 +14,7 @@ import { resolveCampaigns } from "@/lib/tracking";
 import { supabaseAdmin } from "@/lib/supabase";
 import { isAuthed } from "@/lib/auth";
 import { capiEventId, sendLeadEvents } from "@/lib/capi";
-import { STAGES, STAGE_BY_STATUS, type Status } from "@/lib/stages";
+import { chainFor, type Status } from "@/lib/stages";
 import { APP_SENDS_EVENTS, SENDER } from "@/lib/sender";
 import { CRM_CONFIGURED, crmPage, drainUnknownUserIds, pickLastNote, pickOwner, statusFromCrmStatusId } from "@/lib/crm";
 
@@ -380,10 +380,10 @@ async function sendMissingStageEvents(
     status: Status;
     deal_value: number | null;
   }[]) {
-    const reached = STAGE_BY_STATUS[lead.status]?.rank ?? 0;
-    const chain = STAGES.filter(
-      (st) => st.event && (st.rank === 0 || (reached > 0 ? st.rank <= reached : st.rank === reached))
-    ).sort((a, b) => a.rank - b.rank);
+    // One shared definition — see chainFor. This used to be spelled out here
+    // and it was missing the `rank >= 1` bound, so every qualified lead was
+    // also reported to Meta as NoAnswer AND Disqualified.
+    const chain = chainFor(lead.status);
 
     chain.forEach((st, i) => {
       if (missing.length >= maxEvents) return;

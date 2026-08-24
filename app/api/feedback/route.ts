@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 import { isAuthed } from "@/lib/auth";
-import { STAGES, STAGE_BY_STATUS, isStatus } from "@/lib/stages";
+import { chainFor, isStatus, STAGE_BY_STATUS, type Status } from "@/lib/stages";
 import { sendLeadEvents } from "@/lib/capi";
 import { APP_SENDS_EVENTS, SENDER } from "@/lib/sender";
 
@@ -82,10 +82,7 @@ export async function POST(req: NextRequest) {
   //
   // Re-sending a stage the lead already passed is free: the event_id is
   // deterministic, so Meta discards the repeat instead of counting it twice.
-  const chain =
-    stage.rank > 0
-      ? STAGES.filter((s) => s.rank >= 1 && s.rank <= stage.rank && s.event).sort((a, b) => a.rank - b.rank)
-      : [stage];
+  const chain = chainFor(status as Status);
 
   // Ordered timestamps ending now, so the sequence Meta reads is the sequence
   // the lead actually walked, and every one of them sits after the lead's
