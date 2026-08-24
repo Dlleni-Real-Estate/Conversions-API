@@ -364,7 +364,7 @@ export default function AnalyticsView({
                   {[
                     { k: t.tLeads, v: fmtInt(a.leads) },
                     { k: t.tCostLead, v: fmtMoney2(a.cost_per_lead, currency) },
-                    { k: t.tQualPct, v: fmtPct(a.qualified_pct) },
+                    { k: t.tQualPct, v: a.worked === 0 ? "—" : fmtPct(a.qualified_pct) },
                     { k: t.tReach, v: fmtInt(a.reach) },
                     { k: t.tCtr, v: fmtPct(a.ctr) },
                     { k: t.tCostQual, v: fmtMoney2(a.cost_per_qualified, currency) },
@@ -412,7 +412,9 @@ export default function AnalyticsView({
                         );
                       }
                       const text =
-                        c.kind === "int"
+                        c.key === "qualified_pct" && a.worked === 0
+                          ? "—"
+                          : c.kind === "int"
                           ? fmtInt(v as number)
                           : c.kind === "money"
                             ? fmtMoney(v as number, currency)
@@ -484,7 +486,12 @@ export default function AnalyticsView({
                 <div key={p.platform} className="flex items-center justify-between text-sm">
                   <span className="uppercase text-slate-700">{p.platform}</span>
                   <span className="tabular-nums text-slate-500">
-                    {fmtInt(p.leads)} · <span className="text-emerald-600">{fmtPct(p.qualified_pct)} {t.qualShort}</span>
+                    {fmtInt(p.leads)} {t.leadsUnit} ·{" "}
+                    {p.qualified_pct === null ? (
+                      <span className="text-slate-400">—</span>
+                    ) : (
+                      <span className="text-emerald-600">{fmtPct(p.qualified_pct)} {t.qualShort}</span>
+                    )}
                   </span>
                 </div>
               ))}
@@ -513,10 +520,14 @@ export default function AnalyticsView({
                         <div className="flex items-baseline justify-between gap-3 text-sm">
                           <span dir="auto" className="truncate text-slate-700">{v.label || v.value}</span>
                           <span className="shrink-0 tabular-nums text-slate-500">
-                            {v.leads} ·{" "}
-                            <span className={Number(v.qualified_pct) >= 30 ? "text-emerald-600" : "text-slate-400"}>
-                              {fmtPct(v.qualified_pct)}
-                            </span>
+                            {fmtInt(v.leads)} {t.leadsUnit} ·{" "}
+                            {v.qualified_pct === null ? (
+                              <span className="text-slate-400">—</span>
+                            ) : (
+                              <span className={Number(v.qualified_pct) >= 30 ? "text-emerald-600" : "text-slate-400"}>
+                                {fmtPct(v.qualified_pct)} {t.qualShort}
+                              </span>
+                            )}
                           </span>
                         </div>
                         <div className="mt-1">

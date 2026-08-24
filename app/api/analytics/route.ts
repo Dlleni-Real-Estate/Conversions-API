@@ -195,6 +195,12 @@ export async function GET(req: NextRequest) {
   const disqualifiedCount = leads.filter((l) => l.status === "disqualified").length;
   const stepCount = (s: Status) => (s === "contacted" ? reachedCount(s) + disqualifiedCount : reachedCount(s));
 
+  // No lead here has moved out of "new" yet - a just-connected account whose
+  // CRM is not wired in. Every qualified-percentage would print a confident
+  // "0%" that actually means "no information", so they become null and the
+  // screen shows a dash instead of a number pretending to be a verdict.
+  const anyWorked = leads.some((l) => l.status !== "new");
+
   const total = leads.length;
   const funnel = [
     { status: "lead" as const, label: "Leads", count: total, fromPrev: null as number | null, ofTotal: 100 },
@@ -256,6 +262,20 @@ export async function GET(req: NextRequest) {
     if (l.status === "reservation") row.reservations += 1;
     byDay.set(day, row);
   }
+  // Quiet days are real days. Without this fill, a campaign that pauses for a
+  // week draws the 14th standing next to the 23rd, and the silent gap reads
+  // as a data bug instead of as a pause.
+  const present = [...byDay.keys()].sort();
+  if (present.length > 1) {
+    for (
+      let d = new Date(`${present[0]}T00:00:00Z`);
+      d < new Date(`${present[present.length - 1]}T00:00:00Z`);
+      d = new Date(d.getTime() + 86_400_000)
+    ) {
+      const day = d.toISOString().slice(0, 10);
+      if (!byDay.has(day)) byDay.set(day, { date: day, leads: 0, qualified: 0, reservations: 0 });
+    }
+  }
   const daily = [...byDay.values()].sort((a, b) => a.date.localeCompare(b.date));
 
   // ── What the form answers predict ────────────────────────────────────────
@@ -290,7 +310,7 @@ export async function GET(req: NextRequest) {
           leads: r.leads,
           qualified: r.qualified,
           reservations: r.reservations,
-          qualified_pct: pct(r.qualified, r.leads),
+          qualified_pct: anyWorked ? pct(r.qualified, r.leads) : null,
         }))
         .sort((a, b) => b.leads - a.leads),
     }))
@@ -304,7 +324,7 @@ export async function GET(req: NextRequest) {
       platform: p as string,
       leads: rows.length,
       qualified: rows.filter((l) => rankOf(l.status) >= 2).length,
-      qualified_pct: pct(rows.filter((l) => rankOf(l.status) >= 2).length, rows.length),
+      qualified_pct: anyWorked ? pct(rows.filter((l) => rankOf(l.status) >= 2).length, rows.length) : null,
     };
   });
 
@@ -347,7 +367,7 @@ export async function GET(req: NextRequest) {
         no_answer: mine.filter((l) => l.status === "no_answer").length,
         disqualified: mine.filter((l) => l.status === "disqualified").length,
         qualified: q,
-        qualified_pct: pct(q, mine.length),
+        qualified_pct: mine.some((l) => l.status !== "new") ? pct(q, mine.length) : null,
         avg_quality: (() => {
           const qs = mine
             .map((l) => (l as { quality_score?: number | null }).quality_score)

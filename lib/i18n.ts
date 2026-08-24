@@ -248,6 +248,7 @@ export const DICT = {
       "If an answer does not separate good leads from bad, the question is not earning its place on the form",
     notEnoughAnswers: "Not enough repeated answers yet.",
     qualShort: "qual.",
+    leadsUnit: "leads",
 
     // Ad table columns
     tAd: "Ad",
@@ -520,6 +521,7 @@ export const DICT = {
     segmentsSub: "لو إجابة مش بتفرّق بين الليد الكويس والوحش، يبقى السؤال ده مالوش لازمة في الفورم",
     notEnoughAnswers: "الإجابات المتكررة لسه قليلة.",
     qualShort: "مؤهّل",
+    leadsUnit: "ليد",
 
     tAd: "الإعلان",
     tSpend: "المصروف",
