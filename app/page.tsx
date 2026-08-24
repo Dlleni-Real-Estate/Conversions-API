@@ -13,6 +13,8 @@ import type { FormDictionary } from "@/lib/labels";
 import type { Analytics, Lead } from "@/components/types";
 
 const PW_KEY = "dlleni_pw";
+/** Which ad account the dashboard is standing on. Remembered per browser. */
+const ACC_KEY = "dlleni_account";
 const TABS = [
   { id: "pipeline", tk: "tabPipeline" },
   { id: "analytics", tk: "tabAnalytics" },
@@ -45,11 +47,16 @@ function Dashboard() {
   const [statusFilter, setStatusFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [scope, setScope] = useState("all");
-  const [account, setAccount] = useState("all");
+  // One ad account at a time - there is deliberately no "everything at once"
+  // view. Mixing two Businesses' leads and spend in one set of numbers is how
+  // totals stop meaning anything; the switcher swaps worlds instead.
+  const [account, setAccount] = useState("");
   const [lastLoaded, setLastLoaded] = useState<Date | null>(null);
 
   useEffect(() => {
     const saved = typeof window !== "undefined" ? window.sessionStorage.getItem(PW_KEY) : null;
+    const acc = typeof window !== "undefined" ? window.localStorage.getItem(ACC_KEY) : null;
+    if (acc) setAccount(acc);
     if (saved) {
       setPw(saved);
       setAuthed(true);
@@ -100,6 +107,21 @@ function Dashboard() {
     if (authed) load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authed, statusFilter, scope, account]);
+
+  // "" only happens on the very first visit, or when the remembered account
+  // has since been disconnected. Snap to a real account - preferring one that
+  // is enabled - as soon as the list arrives, and remember every choice.
+  useEffect(() => {
+    const list = analytics?.accounts ?? [];
+    if (list.length === 0) return;
+    if (!list.some((a) => a.ad_account_id === account)) {
+      setAccount((list.find((a) => a.enabled) ?? list[0]).ad_account_id);
+    }
+  }, [analytics, account]);
+
+  useEffect(() => {
+    if (account) window.localStorage.setItem(ACC_KEY, account);
+  }, [account]);
 
   // Search reloads on its own, debounced. It used to sit outside the effect's
   // dependency list entirely, which is why typing in the box did nothing until
@@ -184,7 +206,6 @@ function Dashboard() {
                   }}
                   className="tap max-w-[11rem] rounded-lg border border-brand-300 bg-brand-50 px-3 py-1.5 text-xs font-medium text-brand-800 shadow-card sm:max-w-none"
                 >
-                  <option value="all">{t.allAccounts}</option>
                   {analytics?.accounts?.map((a) => (
                     <option key={a.ad_account_id} value={a.ad_account_id}>
                       {(a.name || a.ad_account_id) + (a.business_name ? ` \u2014 ${a.business_name}` : "")}

@@ -225,9 +225,20 @@ export async function GET(req: NextRequest) {
   const withinHour = responseHours.length ? pct(responseHours.filter((h) => h <= 1).length, responseHours.length) : null;
 
   // ── Daily volume ─────────────────────────────────────────────────────────
+  // Days are Cairo days. submitted_at is stored in UTC, and slicing the UTC
+  // date put every lead that arrived between midnight and 3am Cairo on the
+  // previous day - so this chart quietly disagreed with Ads Manager, which
+  // reports in the ad account's timezone. Both connected accounts run on
+  // Cairo time.
+  const cairoDay = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Africa/Cairo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
   const byDay = new Map<string, { date: string; leads: number; qualified: number; reservations: number }>();
   for (const l of leads) {
-    const day = l.submitted_at.slice(0, 10);
+    const day = cairoDay.format(new Date(l.submitted_at));
     const row = byDay.get(day) ?? { date: day, leads: 0, qualified: 0, reservations: 0 };
     row.leads += 1;
     if (rankOf(l.status) >= 2) row.qualified += 1;

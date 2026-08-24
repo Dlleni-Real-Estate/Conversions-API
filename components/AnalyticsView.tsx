@@ -116,7 +116,7 @@ export default function AnalyticsView({
                       </div>
                       <div className="text-[11px] text-slate-400">
                         {c.date_start ? `${fmtDay(c.date_start, locale)} → ${c.date_stop ? fmtDay(c.date_stop, locale) : ""}` : ""}
-                        {(data.accounts?.length ?? 0) > 1 && c.ad_account_id && (
+                        {!data.account && (data.accounts?.length ?? 0) > 1 && c.ad_account_id && (
                           <span dir="auto" className="ms-1.5 rounded-md border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-slate-500">
                             {data.accounts?.find((a) => a.ad_account_id === c.ad_account_id)?.name || c.ad_account_id}
                           </span>

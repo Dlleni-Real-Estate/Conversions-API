@@ -949,7 +949,12 @@ export type FormSchema = {
 };
 
 export async function fetchFormSchema(formId: string, scope?: AccountScope): Promise<FormSchema> {
-  const pageToken = await getPageToken();
+  // Same credential rule as reading the leads themselves: the Page token when
+  // one can be minted, else the account's own user token. This function once
+  // ignored its scope and always asked with the deployment token - which
+  // cannot see another Business's form, so that form's Arabic wording
+  // silently never arrived and the dashboard showed machine keys instead.
+  const pageToken = await leadReadToken(scope);
   const data = await graph<{ id: string; name?: string; locale?: string; questions?: FormQuestion[] }>(
     `/${formId}`,
     { fields: "id,name,locale,questions" },

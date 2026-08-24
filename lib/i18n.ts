@@ -74,7 +74,6 @@ export const DICT = {
     accNoBizGranted: "none \u2014 sign in again and approve the Businesses you want listed here",
     accPickPage: "\u2014 choose the Page \u2014",
     accSignOut: "Sign out \u2014 next login asks consent fresh",
-    allAccounts: "All ad accounts",
     accConnectedNext: (pinned: number, off: number) =>
       `Connected \u2714 ${pinned} campaign(s) switched ON automatically and a sync is running now \u2014 their leads land within a minute.` +
       (off > 0 ? ` ${off} older, finished campaign(s) were left off; switch any of them on in Tracked campaigns below.` : ""),
@@ -350,7 +349,6 @@ export const DICT = {
     accNoBizGranted: "ولا واحد \u2014 سجّل تاني ووافق على الـBusinesses اللي عايزها تظهر هنا",
     accPickPage: "\u2014 اختار الصفحة \u2014",
     accSignOut: "تسجيل خروج \u2014 الدخول الجاي بموافقة جديدة",
-    allAccounts: "كل حسابات الإعلانات",
     accConnectedNext: (pinned: number, off: number) =>
       `اتربط \u2714 اتشغّل ${pinned} كمبين أوتوماتيك وفيه سينك شغال دلوقتي \u2014 ليدزهم هتنزل خلال دقيقة.` +
       (off > 0 ? ` وفيه ${off} كمبين قديم خلصوا اتسابوا مقفولين؛ تقدر تشغّل أي واحد منهم من Tracked campaigns تحت.` : ""),

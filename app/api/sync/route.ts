@@ -99,9 +99,20 @@ export async function GET(req: NextRequest) {
     // once per run rather than once per lead.
     const formIdsSeen = new Set<string>();
     const formNames = new Map<string, string>();
+    // Which account's credential can read each form. A form lives on a Page,
+    // and only a token that can see that Page can read its schema. Every form
+    // on every connected Page is seeded here - not just forms mentioned by
+    // this run's new leads - because a form whose schema fetch once failed
+    // would otherwise never be retried: quiet campaigns stop producing new
+    // mentions of it.
+    const formScopes = new Map<string, AccountScope>();
     for (const acc of tracked.length > 0 ? accounts : []) {
       try {
-        for (const f of await listLeadForms(acc)) formNames.set(f.id, f.name);
+        for (const f of await listLeadForms(acc)) {
+          formNames.set(f.id, f.name);
+          formIdsSeen.add(f.id);
+          if (!formScopes.has(f.id)) formScopes.set(f.id, acc);
+        }
       } catch {
         // A missing form title is cosmetic — never fail a sync over it.
       }
@@ -177,7 +188,11 @@ export async function GET(req: NextRequest) {
         }
 
         leadsFound += found;
-        for (const r of rows) if (r.form_id) formIdsSeen.add(String(r.form_id));
+        for (const r of rows)
+          if (r.form_id) {
+            formIdsSeen.add(String(r.form_id));
+            if (!formScopes.has(String(r.form_id))) formScopes.set(String(r.form_id), scope);
+          }
 
         if (rows.length === 0) {
           const spend = await refreshInsights(db, campaign.id, campaign.created_time, scope).then(
@@ -185,7 +200,14 @@ export async function GET(req: NextRequest) {
               insightsRows += r.rows;
               return r.spend;
             },
-            () => undefined
+            (err) => {
+              // Spend staying stale is tolerable; not knowing it went stale is
+              // not. Same lesson as the lead reads: name the failure.
+              console.error(
+                `[sync] insights for "${campaign.name}" failed: ${err instanceof Error ? err.message : err}`
+              );
+              return undefined;
+            }
           );
           perCampaign.push({ campaign: campaign.name, ads: ads.length, found: 0, inserted: 0, spend });
           continue;
@@ -211,7 +233,12 @@ export async function GET(req: NextRequest) {
               insightsRows += r.rows;
               return r.spend;
             },
-            () => undefined
+            (err) => {
+              console.error(
+                `[sync] insights for "${campaign.name}" failed: ${err instanceof Error ? err.message : err}`
+              );
+              return undefined;
+            }
           ),
         });
       } catch (err) {
@@ -232,7 +259,7 @@ export async function GET(req: NextRequest) {
 
     // The wording of each form — what the customer actually read — so the
     // dashboard can show the Arabic question and answer instead of Meta's keys.
-    const formsStored = await refreshFormSchemas(db, formIdsSeen);
+    const formsStored = await refreshFormSchemas(db, formIdsSeen, formScopes);
 
     // What the sales team actually did, read back out of 8X CRM. This is the
     // only thing that fills `status`; nobody types stages into this app.
@@ -345,7 +372,8 @@ async function refreshInsights(
  */
 async function refreshFormSchemas(
   db: ReturnType<typeof supabaseAdmin>,
-  formIds: Set<string>
+  formIds: Set<string>,
+  scopes: Map<string, AccountScope>
 ): Promise<number> {
   if (formIds.size === 0) return 0;
 
@@ -363,9 +391,11 @@ async function refreshFormSchemas(
   const schemas = [];
   for (const id of stale) {
     try {
-      schemas.push({ ...(await fetchFormSchema(id)), updated_at: new Date().toISOString() });
-    } catch {
-      // A form we cannot read just falls back to showing its keys.
+      schemas.push({ ...(await fetchFormSchema(id, scopes.get(id))), updated_at: new Date().toISOString() });
+    } catch (err) {
+      // The dashboard falls back to machine keys for this form. Say which form
+      // and why - this exact silence is how a wrong-token read hid for days.
+      console.error(`[sync] form ${id} schema unreadable: ${err instanceof Error ? err.message : err}`);
     }
   }
   if (schemas.length === 0) return 0;
