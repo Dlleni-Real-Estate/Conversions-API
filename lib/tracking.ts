@@ -69,6 +69,51 @@ export async function setOverride(
   if (error) throw new Error(error.message);
 }
 
+/**
+ * Track a newly connected account's campaigns, without waiting to be asked.
+ *
+ * The cutoff rule ("new things in, old things out") was written for ONE
+ * account that had been running long before this system existed. Applied to an
+ * account you just deliberately connected, it reads as a bug: the connect
+ * succeeds, the dashboard stays empty, and nothing says the campaigns are
+ * sitting there switched off. Connecting IS the intent, so it pins them ON.
+ *
+ * Bounded to what a person would actually mean: campaigns still delivering, or
+ * created in the last 90 days. Older, finished campaigns stay off and one
+ * click away - a five-year-old account should not drag its whole history in.
+ *
+ * Written as explicit overrides, so every row is visible in Tracked campaigns
+ * and reversible there. Existing overrides are never touched: a campaign
+ * someone deliberately switched off stays off through a reconnect.
+ */
+export async function trackNewAccountCampaigns(
+  db: DB,
+  campaigns: Campaign[],
+  windowDays = 90
+): Promise<{ pinned: number; skipped: number }> {
+  if (campaigns.length === 0) return { pinned: 0, skipped: 0 };
+
+  const existing = await getOverrides(db);
+  const horizon = Date.now() - windowDays * 24 * 3600_000;
+
+  const rows = campaigns
+    .filter((c) => !existing.has(c.id))
+    .filter((c) => c.effective_status === "ACTIVE" || Date.parse(c.created_time) >= horizon)
+    .map((c) => ({
+      campaign_id: c.id,
+      campaign_name: c.name ?? null,
+      campaign_created_time: c.created_time ?? null,
+      enabled: true,
+      updated_at: new Date().toISOString(),
+    }));
+
+  if (rows.length > 0) {
+    const { error } = await db.from("tracked_campaigns").upsert(rows, { onConflict: "campaign_id" });
+    if (error) throw new Error(error.message);
+  }
+  return { pinned: rows.length, skipped: campaigns.length - rows.length };
+}
+
 /** Drop the manual override so the campaign falls back to the cutoff rule. */
 export async function clearOverride(db: DB, campaignId: string): Promise<void> {
   const { error } = await db.from("tracked_campaigns").delete().eq("campaign_id", campaignId);

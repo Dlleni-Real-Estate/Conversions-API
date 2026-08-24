@@ -75,8 +75,9 @@ export const DICT = {
     accPickPage: "\u2014 choose the Page \u2014",
     accSignOut: "Sign out \u2014 next login asks consent fresh",
     allAccounts: "All ad accounts",
-    accConnectedNext:
-      "Connected \u2714 A sync is running now \u2014 its campaigns land in Tracked campaigns within a minute. Campaigns created before the cutoff date arrive switched OFF: pin ON the ones this dashboard should follow, and their leads flow from the next sync.",
+    accConnectedNext: (pinned: number, off: number) =>
+      `Connected \u2714 ${pinned} campaign(s) switched ON automatically and a sync is running now \u2014 their leads land within a minute.` +
+      (off > 0 ? ` ${off} older, finished campaign(s) were left off; switch any of them on in Tracked campaigns below.` : ""),
     accCreateDataset: "Create dataset & connect",
     accCreateDatasetHint:
       "No dataset on this ad account yet. One click creates one ON the account \u2014 born connected, verified, no Business Settings walk \u2014 and the events it receives carry lead id, hashed phone and email, which is what match quality is made of.",
@@ -350,8 +351,9 @@ export const DICT = {
     accPickPage: "\u2014 اختار الصفحة \u2014",
     accSignOut: "تسجيل خروج \u2014 الدخول الجاي بموافقة جديدة",
     allAccounts: "كل حسابات الإعلانات",
-    accConnectedNext:
-      "اتربط \u2714 فيه سينك شغال دلوقتي \u2014 كمبيناته هتظهر في Tracked campaigns خلال دقيقة. الكمبينات المتعملة قبل تاريخ البداية بتيجي مقفولة: شغّل اللي عايز الداشبورد يتابعها، وليدزها هتنزل من السينك اللي بعدها.",
+    accConnectedNext: (pinned: number, off: number) =>
+      `اتربط \u2714 اتشغّل ${pinned} كمبين أوتوماتيك وفيه سينك شغال دلوقتي \u2014 ليدزهم هتنزل خلال دقيقة.` +
+      (off > 0 ? ` وفيه ${off} كمبين قديم خلصوا اتسابوا مقفولين؛ تقدر تشغّل أي واحد منهم من Tracked campaigns تحت.` : ""),
     accCreateDataset: "أنشئ داتاسِت واربط",
     accCreateDatasetHint:
       "مفيش داتاسِت على حساب الإعلانات ده. ضغطة واحدة بتعمل واحد على الحساب نفسه \u2014 بيتولد متوصّل ومتأكد منه، من غير مشوار Business Settings \u2014 والأحداث اللي بتوصله شايلة رقم الليد والتليفون والإيميل مشفّرين، ودي أساس جودة المطابقة.",

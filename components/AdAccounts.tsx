@@ -247,7 +247,7 @@ export default function AdAccounts({ pw }: { pw: string }) {
         return;
       }
       setProbe((p) => (p ? { ...p, available: p.available.filter((x) => x.id !== a.id) } : p));
-      setInfo(t.accConnectedNext);
+      setInfo(t.accConnectedNext(Number(j.campaigns_pinned ?? 0), Number(j.campaigns_left_off ?? 0)));
       kickSync();
       await load();
     } catch {

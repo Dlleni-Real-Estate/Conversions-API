@@ -6,6 +6,8 @@ import {
   grantedBusinesses, listAdAccounts, pagesForAccount, tokenOwnerName, verifyPairing,
 } from "@/lib/meta";
 import { isAdmin } from "@/lib/auth";
+import { trackNewAccountCampaigns } from "@/lib/tracking";
+import { listCampaigns } from "@/lib/meta";
 import { logAudit } from "@/lib/audit";
 import { forgetToken, tokenExpiry, tokenForNonce } from "@/lib/oauth";
 
@@ -347,12 +349,36 @@ export async function POST(req: NextRequest) {
   );
   if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
 
+  // Connecting an account means wanting its leads. Pin its live and recent
+  // campaigns ON now, so the very next sync walks them - instead of a silent
+  // empty dashboard while they sit switched off behind the cutoff rule.
+  let tracked = { pinned: 0, skipped: 0 };
+  try {
+    const campaigns = await listCampaigns({
+      adAccountId: accountId,
+      datasetId,
+      pageId: pageId || "",
+      name: body?.name ?? undefined,
+      token: ownToken ?? undefined,
+    });
+    tracked = await trackNewAccountCampaigns(db, campaigns);
+    console.log(
+      `[connect] ${accountId}: pinned ${tracked.pinned} campaign(s) ON, left ${tracked.skipped} older one(s) off`
+    );
+  } catch (err) {
+    // A pairing that verified is still worth keeping; the campaigns can be
+    // switched on by hand. Named, not swallowed.
+    console.warn(`[connect] ${accountId}: could not pin campaigns - ${err instanceof Error ? err.message : err}`);
+  }
+
   await logAudit(req, "account_connect", accountId, {
     dataset_id: datasetId, page_id: pageId || null, own_token: Boolean(ownToken),
+    campaigns_pinned: tracked.pinned,
   });
 
   return NextResponse.json({
     ok: true, ad_account_id: accountId, dataset_id: datasetId, page_id: pageId || null, verified: true,
+    campaigns_pinned: tracked.pinned, campaigns_left_off: tracked.skipped,
   });
 }
 
