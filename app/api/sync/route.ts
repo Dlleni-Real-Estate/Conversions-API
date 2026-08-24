@@ -16,7 +16,7 @@ import { isAuthed } from "@/lib/auth";
 import { capiEventId, sendLeadEvents } from "@/lib/capi";
 import { STAGES, STAGE_BY_STATUS, type Status } from "@/lib/stages";
 import { APP_SENDS_EVENTS, SENDER } from "@/lib/sender";
-import { CRM_CONFIGURED, crmPage, pickLastNote, pickOwner, statusFromCrmStatusId } from "@/lib/crm";
+import { CRM_CONFIGURED, crmPage, drainUnknownUserIds, pickLastNote, pickOwner, statusFromCrmStatusId } from "@/lib/crm";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -598,6 +598,10 @@ async function syncCrmStatuses(db: ReturnType<typeof supabaseAdmin>): Promise<Cr
 
   if (unmapped.size > 0) {
     console.warn(`[sync] crm: ${unmapped.size} unknown status_id(s): ${[...unmapped].join(", ")} — add them to STATUS_ID_TO_STAGE`);
+  }
+  const unknownUsers = drainUnknownUserIds();
+  if (unknownUsers.length > 0) {
+    console.warn(`[sync] crm: unknown user id(s): ${unknownUsers.join(", ")} — likely suspended agents; add to CRM_USER_TO_NAME`);
   }
   console.log(
     `[sync] crm: scanned=${scanned}/${total} matched=${matched} moved=${moves.length} owners=${owners} notes=${notesAdded}` +

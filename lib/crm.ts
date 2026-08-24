@@ -212,6 +212,56 @@ export function pickStageLabel(row: Record<string, unknown>): string | null {
 
 const PHONE_KEYS = ["phone", "mobile", "phone_number", "mobile_number", "msisdn", "contact_number"];
 
+/**
+ * user id -> name, read off the CRM's own Settings > Users table, which lists
+ * ID and Name side by side — the same standard as the stage map: confirmed by
+ * sight, never inferred.
+ *
+ * Why a constant and not an API call: v4 returns assignees as bare ids, the
+ * documented API has no users endpoint (every plausible path 404s — the token
+ * is scoped to lead search), and the SPA's own dropdown is fed from a cached
+ * bootstrap. Fourteen accounts that change a few times a year do not justify
+ * scraping; an id not listed here renders as "Agent #N" and is reported by the
+ * sync log, so a new hire is a one-line addition, not a silent blank.
+ *
+ * Two suspended accounts exist beyond these (the Assignees filter shows
+ * "mohamed shawki" who is not in the active list); their ids will surface as
+ * Agent #N on old leads and can be added when they do.
+ */
+export const CRM_USER_TO_NAME: Record<number, string> = {
+  2: "General Manager",        // Islam — CRM General Manager
+  7: "Muhammad Salameh",       // Sherif Team
+  8: "Youstina Tadros",        // Youstina Team Leader — receives new leads
+  9: "Shama Abdelhamid",       // Shama Team Leader
+  10: "Abdelrahman Mohamed",   // Youstina Team
+  11: "Mariam Helmy",          // Sherif Team
+  12: "mohamed aboarab",       // Youstina Team
+  13: "Ahmed Roshdy",          // Youstina Team
+  16: "Khaled Zakaria",        // Youstina Team
+  17: "aya atef",              // Youstina Team
+  18: "Ahmed Moustafa",        // Abdalla Team
+  19: "ali sabry",             // Youstina Team
+};
+
+const unknownUserIds = new Set<number>();
+
+/** Name for a CRM user id; unknown ids render honestly and get reported. */
+export function resolveUserName(id: unknown): string | null {
+  const n = typeof id === "number" ? id : typeof id === "string" ? Number(id) : NaN;
+  if (!Number.isFinite(n)) return null;
+  const name = CRM_USER_TO_NAME[n];
+  if (name) return name;
+  unknownUserIds.add(n);
+  return `Agent #${n}`;
+}
+
+/** Unknown ids met since the last call — the sync logs these, then clears. */
+export function drainUnknownUserIds(): number[] {
+  const out = [...unknownUserIds];
+  unknownUserIds.clear();
+  return out;
+}
+
 /** A person's name out of whatever object shape the CRM uses for people. */
 function personName(v: unknown): string | null {
   if (typeof v === "string" && v.trim()) return v.trim();
@@ -237,9 +287,18 @@ function personName(v: unknown): string | null {
 export function pickOwner(row: Record<string, unknown>): string | null {
   const v = row.assignees ?? row.assignee ?? row.owner ?? null;
   if (Array.isArray(v)) {
-    const names = v.map(personName).filter((n): n is string => Boolean(n));
+    const names = v
+      .map((entry) => {
+        // v4's real shape: [{id: 8, created_at: "…"}] — an id, never a name.
+        if (entry && typeof entry === "object" && "id" in (entry as object)) {
+          return resolveUserName((entry as Record<string, unknown>).id);
+        }
+        return personName(entry);
+      })
+      .filter((n): n is string => Boolean(n));
     return names.length ? names.join(" + ") : null;
   }
+  if (typeof v === "number") return resolveUserName(v);
   return personName(v);
 }
 
@@ -254,16 +313,24 @@ export function pickLastNote(row: Record<string, unknown>): { body: string; auth
   if (typeof v === "string" && v.trim()) return { body: v.trim(), author: null, at: null };
   if (!v || typeof v !== "object") return null;
   const o = v as Record<string, unknown>;
+  // The real v4 shape puts the text in `notes` — and an activity with
+  // notes:null is a logged call with nothing written, which is a real event
+  // but not a note, so it produces nothing here.
   let body: string | null = null;
-  for (const k of ["description", "note", "body", "comment", "text", "title", "content"]) {
+  for (const k of ["notes", "description", "note", "body", "comment", "text", "content"]) {
     const b = o[k];
     if (typeof b === "string" && b.trim()) { body = b.trim(); break; }
   }
   if (!body) return null;
-  let author: string | null = null;
-  for (const k of ["created_by_name", "user", "agent", "author", "created_by", "owner"]) {
-    const a = personName(o[k]);
-    if (a) { author = a; break; }
+  // `created_by` is a user id — the agent who wrote it, not the one holding
+  // the lead. Those differ exactly when a team lead annotates someone else's
+  // lead, which is the case worth recording faithfully.
+  let author: string | null = resolveUserName(o.created_by);
+  if (!author) {
+    for (const k of ["created_by_name", "user", "agent", "author", "owner"]) {
+      const a = personName(o[k]);
+      if (a) { author = a; break; }
+    }
   }
   let at: string | null = null;
   for (const k of ["created_at", "date", "at", "updated_at"]) {
