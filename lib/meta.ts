@@ -561,7 +561,14 @@ export function flattenFields(lead: RawLead): {
  */
 export function normalizeEgyptPhone(raw?: string): string | undefined {
   if (!raw) return undefined;
-  let d = raw.replace(/\D/g, "");
+  // Customers type their number the way they write: twelve AR Elite leads
+  // arrived as Arabic-Indic digits (٠١٥٥...), which \D treats as "not a
+  // digit" - so the whole number was stripped and the lead was stored with no
+  // phone at all: unmatchable in the CRM, unpushable to it, uncallable.
+  const ascii = raw
+    .replace(/[\u0660-\u0669]/g, (c) => String(c.charCodeAt(0) - 0x0660))
+    .replace(/[\u06f0-\u06f9]/g, (c) => String(c.charCodeAt(0) - 0x06f0));
+  let d = ascii.replace(/\D/g, "");
   if (!d) return undefined;
   d = d.replace(/^00/, "");
   if (d.startsWith("20")) return d;

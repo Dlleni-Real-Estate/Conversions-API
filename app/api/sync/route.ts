@@ -461,6 +461,7 @@ async function pushLeadsToCrm(
     .select("lead_id,full_name,phone,email,form_id,raw_fields,campaign_name,ad_name")
     .in("ad_account_id", ids)
     .is("crm_pushed_at", null)
+    .not("phone", "is", null)
     .order("submitted_at", { ascending: true })
     .limit(limit + 1);
 
@@ -494,8 +495,15 @@ async function pushLeadsToCrm(
 
   let pushed = 0;
   let failed = 0;
+  const pushStarted = Date.now();
 
   for (const lead of batch) {
+    // The whole sync shares one 60s budget, and this loop is HTTP call after
+    // HTTP call. Overrunning it does not just cut the push short - it kills
+    // the function before the CRM mirror ever runs, which is how one slow
+    // batch silenced stage feedback entirely. Whatever is left stays queued
+    // for the next run ten minutes later.
+    if (Date.now() - pushStarted > 15_000) break;
     const lines: string[] = [];
     if (lead.campaign_name) lines.push(lead.campaign_name);
     if (lead.ad_name) lines.push(lead.ad_name);
@@ -539,8 +547,9 @@ async function pushLeadsToCrm(
     }
   }
 
-  console.log(`[sync] crm push: sent=${pushed} refused=${failed} queued=${left}`);
-  return { pushed, failed, left };
+  const leftNow = left + (batch.length - pushed - failed);
+  console.log(`[sync] crm push: sent=${pushed} refused=${failed} queued=${leftNow}`);
+  return { pushed, failed, left: leftNow };
 }
 
 /**

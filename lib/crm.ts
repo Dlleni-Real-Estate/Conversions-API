@@ -523,8 +523,30 @@ export type StoreLeadInput = {
 
 export type StoreLeadResult = { ok: boolean; status: number; body: string };
 
+/**
+ * Gulf and Levant buyers are a normal part of Egyptian real estate, and 8X
+ * validates the number against the declared country - country_code "EG" on a
+ * Jordanian number is a hard 422. Recognise the common prefixes; anything
+ * else is declared as what it is by prefix or falls back to EG.
+ */
+const COUNTRY_BY_PREFIX: [string, string][] = [
+  ["20", "EG"], ["962", "JO"], ["965", "KW"], ["966", "SA"], ["968", "OM"],
+  ["971", "AE"], ["973", "BH"], ["974", "QA"], ["961", "LB"], ["964", "IQ"], ["218", "LY"],
+];
+
+function countryOf(stored?: string | null): string {
+  const d = String(stored ?? "").replace(/\D/g, "");
+  for (const [prefix, code] of COUNTRY_BY_PREFIX) if (d.startsWith(prefix)) return code;
+  return "EG";
+}
+
 export async function crmStoreLead(input: StoreLeadInput): Promise<StoreLeadResult> {
-  const phone = localEgyptPhone(input.phone);
+  const country = countryOf(input.phone);
+  // Egyptian numbers go in the local form people search by; foreign numbers
+  // keep their international digits - "0" + a Jordanian number is nothing.
+  const phone = country === "EG"
+    ? localEgyptPhone(input.phone)
+    : String(input.phone ?? "").replace(/\D/g, "");
   const full = (input.fullName ?? "").trim();
   const parts = full.split(/\s+/).filter(Boolean);
 
@@ -539,7 +561,7 @@ export async function crmStoreLead(input: StoreLeadInput): Promise<StoreLeadResu
     address: "",
     zip_code: "",
     birthdate: "",
-    phones: phone ? [{ phone, country_code: "EG" }] : [],
+    phones: phone ? [{ phone, country_code: country }] : [],
     // 22 is the account type the API's own example uses for an email address.
     social_accounts: input.email ? [{ social_account: input.email, account_type_id: 22 }] : [],
     form_id: input.formId ?? "",
