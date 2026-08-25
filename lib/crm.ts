@@ -346,6 +346,26 @@ export function pickPhone(row: Record<string, unknown>): string | null {
     if (typeof v === "string" && v.trim()) return v.trim();
     if (typeof v === "number") return String(v);
   }
+  // 8X's own storeLead payload is { phones: [{ phone, country_code }] } - the
+  // lead model stores numbers as a RELATION, not a column. A manually created
+  // lead often carries its number ONLY there, so reading just the flat keys
+  // made phone-matching silently find nothing for exactly the leads that have
+  // no leadgen_id and need it most. The first live run proved it: 56 manual
+  // entries in the CRM, zero matched by phone.
+  for (const k of ["phones", "phone_numbers", "mobiles", "contacts"]) {
+    const v = row[k];
+    if (!Array.isArray(v)) continue;
+    for (const entry of v) {
+      if (typeof entry === "string" && entry.trim()) return entry.trim();
+      if (entry && typeof entry === "object") {
+        for (const nk of ["phone", "mobile", "number", "phone_number", "value"]) {
+          const nv = (entry as Record<string, unknown>)[nk];
+          if (typeof nv === "string" && nv.trim()) return nv.trim();
+          if (typeof nv === "number") return String(nv);
+        }
+      }
+    }
+  }
   return null;
 }
 

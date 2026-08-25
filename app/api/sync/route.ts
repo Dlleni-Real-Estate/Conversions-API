@@ -880,6 +880,11 @@ async function syncCrmStatuses(db: ReturnType<typeof supabaseAdmin>): Promise<Cr
   let matched = 0;
   let matchedByPhone = 0;
   let total = 0;
+  // Field NAMES (never values) of one row that has no leadgen_id - the shape
+  // of a manually created lead. Logged only when phone-matching found nothing,
+  // so a wrong guess about where 8X keeps the number diagnoses itself from
+  // the next run's log instead of staying invisible.
+  let manualRowKeys: string | null = null;
 
   try {
     for (let start = 0; ; start += CRM_PAGE) {
@@ -891,6 +896,10 @@ async function syncCrmStatuses(db: ReturnType<typeof supabaseAdmin>): Promise<Cr
       for (const row of page.rows) {
         let leadId = row.leadgen_id ? String(row.leadgen_id) : null;
         let current = leadId ? mine.get(leadId) : undefined;
+
+        if (!row.leadgen_id && manualRowKeys === null) {
+          manualRowKeys = Object.keys(row).slice(0, 40).join(",");
+        }
 
         if (current === undefined) {
           const hit = byPhone.get(normalizeEgyptPhone(pickPhone(row) ?? undefined) ?? "");
@@ -978,6 +987,9 @@ async function syncCrmStatuses(db: ReturnType<typeof supabaseAdmin>): Promise<Cr
 
   if (unmapped.size > 0) {
     console.warn(`[sync] crm: ${unmapped.size} unknown status_id(s): ${[...unmapped].join(", ")} — add them to STATUS_ID_TO_STAGE`);
+  }
+  if (matchedByPhone === 0 && byPhone.size > 0 && manualRowKeys) {
+    console.log(`[sync] crm: phone-match found nothing; a no-leadgen row carries keys: ${manualRowKeys}`);
   }
   const unknownUsers = drainUnknownUserIds();
   if (unknownUsers.length > 0) {
