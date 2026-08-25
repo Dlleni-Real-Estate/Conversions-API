@@ -10,6 +10,7 @@ import {
   flattenFields,
   normalizeEgyptPhone,
   type AccountScope,
+  type FormSchema,
 } from "@/lib/meta";
 import { activeAccounts, scopeIndex } from "@/lib/accounts";
 import { resolveCampaigns } from "@/lib/tracking";
@@ -18,9 +19,19 @@ import { isAuthed } from "@/lib/auth";
 import { capiEventId, sendLeadEvents } from "@/lib/capi";
 import { chainFor, type Status } from "@/lib/stages";
 import { leadQualityScore } from "@/lib/quality";
+import { answerLabel, buildDictionary, questionLabel } from "@/lib/labels";
 import { renewExpiringTokens } from "@/lib/oauth";
 import { APP_SENDS_EVENTS, SENDER } from "@/lib/sender";
-import { CRM_CONFIGURED, crmPage, drainUnknownUserIds, pickLastNote, pickOwner, statusFromCrmStatusId } from "@/lib/crm";
+import {
+  CRM_CONFIGURED,
+  crmPage,
+  crmStoreLead,
+  drainUnknownUserIds,
+  pickLastNote,
+  pickOwner,
+  pickPhone,
+  statusFromCrmStatusId,
+} from "@/lib/crm";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -261,6 +272,12 @@ export async function GET(req: NextRequest) {
     // dashboard can show the Arabic question and answer instead of Meta's keys.
     const formsStored = await refreshFormSchemas(db, formIdsSeen, formScopes);
 
+    // Hand the sales team the leads they cannot otherwise see. Only accounts
+    // explicitly opted in (ad_accounts.crm_push) are pushed - the original
+    // account's leads already arrive in 8X through its own Facebook
+    // integration, and pushing those would create a second copy of every one.
+    const crmPushed = await pushLeadsToCrm(db);
+
     // What the sales team actually did, read back out of 8X CRM. This is the
     // only thing that fills `status`; nobody types stages into this app.
     crm = await syncCrmStatuses(db);
@@ -299,6 +316,7 @@ export async function GET(req: NextRequest) {
       `[sync] accounts=${accounts.length} campaigns=${tracked.length}/${states.length} ads=${adsSeen} ` +
         `leads=${leadsFound} new=${leadsNew} stageEvents=${stageEvents} ` +
         `insights=${insightsRows} forms=${formsStored} ` +
+        `crmPush=${crmPushed.pushed}/${crmPushed.pushed + crmPushed.failed}${crmPushed.left ? ` (+${crmPushed.left} queued)` : ""} ` +
         `crm=${crm.skipped ?? `${crm.matched}/${crm.scanned} matched, ${crm.changed} moved, ${crm.owners} owners, ${crm.notes} notes`}`
     );
 
@@ -314,6 +332,7 @@ export async function GET(req: NextRequest) {
       insightsRows,
       stageEvents,
       formsStored,
+      crmPushed,
       crm,
       perCampaign,
     });
@@ -406,6 +425,122 @@ async function refreshFormSchemas(
 
   await db.from("lead_forms").upsert(schemas, { onConflict: "form_id" });
   return schemas.length;
+}
+
+/**
+ * Send leads the CRM has never seen into 8X, so somebody actually calls them.
+ *
+ * Scoped by ad_accounts.crm_push, which is opt-in per account and false by
+ * default. That flag is the whole safety mechanism: the first account's leads
+ * reach 8X through its own Facebook Lead Ads integration, so pushing them here
+ * would duplicate every single one, and a duplicate lead is worse than a
+ * missing one - two agents call the same person.
+ *
+ * Bounded per run so a backlog drains over consecutive syncs instead of
+ * blowing the function's 60s budget. crm_pushed_at is stamped per lead the
+ * moment the CRM accepts it, so a run that dies halfway never re-sends what it
+ * already sent.
+ */
+async function pushLeadsToCrm(
+  db: ReturnType<typeof supabaseAdmin>,
+  limit = 25
+): Promise<{ pushed: number; failed: number; left: number; skipped?: string }> {
+  if (!CRM_CONFIGURED) return { pushed: 0, failed: 0, left: 0, skipped: "CRM_API_KEY not set" };
+
+  const { data: optedIn } = await db
+    .from("ad_accounts")
+    .select("ad_account_id,name")
+    .eq("crm_push", true)
+    .eq("enabled", true);
+
+  if (!optedIn || optedIn.length === 0) return { pushed: 0, failed: 0, left: 0 };
+  const ids = optedIn.map((a) => String(a.ad_account_id));
+
+  const { data: due, error } = await db
+    .from("leads")
+    .select("lead_id,full_name,phone,email,form_id,raw_fields,campaign_name,ad_name")
+    .in("ad_account_id", ids)
+    .is("crm_pushed_at", null)
+    .order("submitted_at", { ascending: true })
+    .limit(limit + 1);
+
+  if (error) {
+    console.error(`[sync] crm push: cannot read the queue - ${error.message}`);
+    return { pushed: 0, failed: 0, left: 0, skipped: error.message };
+  }
+
+  const rows = (due ?? []) as {
+    lead_id: string;
+    full_name: string | null;
+    phone: string | null;
+    email: string | null;
+    form_id: string | null;
+    raw_fields: Record<string, string> | null;
+    campaign_name: string | null;
+    ad_name: string | null;
+  }[];
+  if (rows.length === 0) return { pushed: 0, failed: 0, left: 0 };
+
+  const batch = rows.slice(0, limit);
+  const left = rows.length > limit ? rows.length - limit : 0;
+
+  // The question wording, so the agent opening the lead reads what the
+  // customer read - not payment_plan: plan_0_6.
+  const formIds = [...new Set(batch.map((r) => r.form_id).filter((v): v is string => Boolean(v)))];
+  const { data: formRows } = formIds.length
+    ? await db.from("lead_forms").select("form_id, name, locale, questions").in("form_id", formIds)
+    : { data: [] };
+  const dict = buildDictionary((formRows ?? []) as unknown as FormSchema[]);
+
+  let pushed = 0;
+  let failed = 0;
+
+  for (const lead of batch) {
+    const lines: string[] = [];
+    if (lead.campaign_name) lines.push(lead.campaign_name);
+    if (lead.ad_name) lines.push(lead.ad_name);
+    for (const [key, value] of Object.entries(lead.raw_fields ?? {})) {
+      if (!value?.trim()) continue;
+      if (/^(full_name|phone|email)$/i.test(key)) continue;   // already on the record
+      lines.push(`${questionLabel(dict, key)}: ${answerLabel(dict, key, value)}`);
+    }
+
+    let result;
+    try {
+      result = await crmStoreLead({
+        fullName: lead.full_name,
+        phone: lead.phone,
+        email: lead.email,
+        formId: lead.form_id,
+        description: lines.join("\n"),
+      });
+    } catch (err) {
+      result = { ok: false, status: 0, body: err instanceof Error ? err.message : String(err) };
+    }
+
+    if (result.ok) {
+      pushed++;
+      await db
+        .from("leads")
+        .update({ crm_pushed_at: new Date().toISOString(), crm_push_error: null })
+        .eq("lead_id", lead.lead_id);
+    } else {
+      failed++;
+      // Left unstamped on purpose: the next run retries it. The error is kept
+      // on the row so a permanent refusal is visible instead of looking like a
+      // lead that simply has not had its turn yet.
+      await db
+        .from("leads")
+        .update({ crm_push_error: `HTTP ${result.status}: ${result.body}`.slice(0, 400) })
+        .eq("lead_id", lead.lead_id);
+      if (failed <= 2) {
+        console.error(`[sync] crm push: lead ${lead.lead_id} refused - HTTP ${result.status} ${result.body}`);
+      }
+    }
+  }
+
+  console.log(`[sync] crm push: sent=${pushed} refused=${failed} queued=${left}`);
+  return { pushed, failed, left };
 }
 
 /**
@@ -702,12 +837,34 @@ async function syncCrmStatuses(db: ReturnType<typeof supabaseAdmin>): Promise<Cr
     );
   }
 
-  const { data: ours, error } = await db.from("leads").select("lead_id,status,owner");
+  const { data: ours, error } = await db.from("leads").select("lead_id,status,owner,phone");
   if (error) return skippedResult(error.message);
 
   const mine = new Map(
     (ours ?? []).map((l) => [String(l.lead_id), { status: l.status as Status, owner: (l.owner as string | null) ?? null }])
   );
+
+  // The second way in. A lead this app pushed into 8X carries no leadgen_id -
+  // the CRM's create endpoint has no field for one - so its stage changes
+  // would come back joined to nothing at all. The phone is the only identifier
+  // both sides hold, normalised here to the same form on both.
+  //
+  // A number that belongs to more than one lead is dropped rather than guessed
+  // at: writing the wrong lead's stage is worse than writing none, because
+  // nothing downstream looks wrong afterwards.
+  const byPhone = new Map<string, { leadId: string; status: Status; owner: string | null }>();
+  const ambiguous = new Set<string>();
+  for (const l of ours ?? []) {
+    const p = normalizeEgyptPhone((l as { phone?: string | null }).phone ?? undefined);
+    if (!p) continue;
+    if (byPhone.has(p)) { ambiguous.add(p); continue; }
+    byPhone.set(p, {
+      leadId: String(l.lead_id),
+      status: l.status as Status,
+      owner: (l.owner as string | null) ?? null,
+    });
+  }
+  for (const p of ambiguous) byPhone.delete(p);
   if (mine.size === 0) {
     console.log("[sync] crm: skipped, no leads stored yet");
     return skippedResult("no leads stored yet");
@@ -721,6 +878,7 @@ async function syncCrmStatuses(db: ReturnType<typeof supabaseAdmin>): Promise<Cr
   const sample: { lead_id: string; owner: string | null; note: string | null }[] = [];
   let scanned = 0;
   let matched = 0;
+  let matchedByPhone = 0;
   let total = 0;
 
   try {
@@ -731,10 +889,19 @@ async function syncCrmStatuses(db: ReturnType<typeof supabaseAdmin>): Promise<Cr
       scanned += page.rows.length;
 
       for (const row of page.rows) {
-        const leadId = row.leadgen_id ? String(row.leadgen_id) : null;
-        if (!leadId) continue;                    // not from Meta lead ads
-        const current = mine.get(leadId);
-        if (current === undefined) continue;      // not a lead this app tracks
+        let leadId = row.leadgen_id ? String(row.leadgen_id) : null;
+        let current = leadId ? mine.get(leadId) : undefined;
+
+        if (current === undefined) {
+          const hit = byPhone.get(normalizeEgyptPhone(pickPhone(row) ?? undefined) ?? "");
+          if (hit) {
+            leadId = hit.leadId;
+            current = { status: hit.status, owner: hit.owner };
+            matchedByPhone++;
+          }
+        }
+
+        if (!leadId || current === undefined) continue;  // not a lead this app tracks
         matched++;
 
         const patch: Record<string, unknown> = {};
@@ -817,7 +984,9 @@ async function syncCrmStatuses(db: ReturnType<typeof supabaseAdmin>): Promise<Cr
     console.warn(`[sync] crm: unknown user id(s): ${unknownUsers.join(", ")} — likely suspended agents; add to CRM_USER_TO_NAME`);
   }
   console.log(
-    `[sync] crm: scanned=${scanned}/${total} matched=${matched} moved=${moves.length} owners=${owners} notes=${notesAdded}` +
+    `[sync] crm: scanned=${scanned}/${total} matched=${matched}` +
+      (matchedByPhone ? ` (${matchedByPhone} by phone)` : "") +
+      ` moved=${moves.length} owners=${owners} notes=${notesAdded}` +
       (unmapped.size ? ` unmapped=${[...unmapped].join(",")}` : "")
   );
 

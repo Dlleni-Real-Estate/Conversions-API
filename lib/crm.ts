@@ -450,3 +450,81 @@ export async function crmPage(start: number, length: number) {
     rows: (parsed.data?.data ?? []) as Record<string, unknown>[],
   };
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Writing a lead INTO 8X
+//
+// Everything above reads. This writes, and it exists because one ad account's
+// leads never arrive on their own: 8X's Facebook integration is connected to
+// the Dlleni page only, so a second Business's leads sit in this app with
+// nobody in the CRM to call them. Searching the CRM for one of them returns
+// nothing at all.
+//
+// The endpoint is 8X's own (Settings > Integrations > Website / Custom):
+//
+//   POST /api/v1/lead_generation/web_form_routings/storeLead
+//
+// `form_id` is the load-bearing field. It does not identify the lead - it
+// selects a WEB FORM ROUTING, and the routing is what decides who the lead is
+// assigned to and which interest it is filed under. We send the Meta lead
+// form's own id, so one routing per form is all the CRM ever needs.
+//
+// ONE THING THIS CANNOT DO: there is no leadgen_id on the payload. A lead
+// created this way carries no Meta id, so the mirror that reads stages back
+// cannot join on one - it falls back to the phone number. That is why the
+// phone is normalised on both sides rather than passed through.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const STORE_LEAD_PATH = "/api/v1/lead_generation/web_form_routings/storeLead";
+
+/**
+ * 20XXXXXXXXXX -> 0XXXXXXXXXX.
+ *
+ * We store Meta's E.164 digits; the CRM stores and searches the local form the
+ * customer actually typed. Sending the stored form creates a lead whose number
+ * nobody in the CRM can find by searching it.
+ */
+export function localEgyptPhone(stored?: string | null): string | null {
+  const d = String(stored ?? "").replace(/\D/g, "");
+  if (!d) return null;
+  if (d.startsWith("20")) return `0${d.slice(2)}`;
+  return d.startsWith("0") ? d : `0${d}`;
+}
+
+export type StoreLeadInput = {
+  fullName?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  /** The routing key - the Meta lead form id. */
+  formId?: string | null;
+  /** Free text the agent sees on the lead: the form answers, verbatim. */
+  description?: string | null;
+};
+
+export type StoreLeadResult = { ok: boolean; status: number; body: string };
+
+export async function crmStoreLead(input: StoreLeadInput): Promise<StoreLeadResult> {
+  const phone = localEgyptPhone(input.phone);
+  const full = (input.fullName ?? "").trim();
+  const parts = full.split(/\s+/).filter(Boolean);
+
+  const payload = {
+    title: "",
+    first_name: parts[0] ?? "",
+    middle_name: parts.length > 2 ? parts.slice(1, -1).join(" ") : "",
+    last_name: parts.length > 1 ? parts[parts.length - 1] : "",
+    full_name: full,
+    description: input.description ?? "",
+    company: "",
+    address: "",
+    zip_code: "",
+    birthdate: "",
+    phones: phone ? [{ phone, country_code: "EG" }] : [],
+    // 22 is the account type the API's own example uses for an email address.
+    social_accounts: input.email ? [{ social_account: input.email, account_type_id: 22 }] : [],
+    form_id: input.formId ?? "",
+  };
+
+  const r = await raw("POST", STORE_LEAD_PATH, JSON.stringify(payload));
+  return { ok: r.status >= 200 && r.status < 300, status: r.status, body: r.text.slice(0, 300) };
+}
