@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 
 const LEAD_COLUMNS =
   "lead_id,full_name,phone,email,status,status_at,notes,owner,deal_value,submitted_at," +
-  "campaign_id,campaign_name,adset_name,ad_id,ad_name,form_name,platform,raw_fields,quality_score";
+  "campaign_id,campaign_name,adset_id,adset_name,ad_id,ad_name,form_name,platform,raw_fields,quality_score";
 
 /** Still worth a phone call — the default working view. */
 const OPEN_STATUSES = [
@@ -45,6 +45,11 @@ export async function GET(req: NextRequest) {
   const campaign = p.get("campaign");
   if (campaign && campaign !== "all") q = q.eq("campaign_id", campaign);
 
+  // Ad set, by id rather than name. Names get edited in Ads Manager and two
+  // ad sets in different campaigns can share one; the id is what Meta means.
+  const adset = p.get("adset");
+  if (adset && adset !== "all") q = q.eq("adset_id", adset);
+
   const ad = p.get("ad");
   if (ad && ad !== "all") q = q.eq("ad_id", ad);
 
@@ -75,22 +80,30 @@ export async function GET(req: NextRequest) {
 
   const leads = (data ?? []) as unknown as { lead_id: string; status: Status }[];
 
-  // How many notes each lead carries, so a row can show it without the client
-  // making one request per lead.
+  // The notes themselves, not just how many. The list used to read
+  // leads.notes, which only this app's own note box ever writes - 3 leads out
+  // of 235 - while the 134 leads carrying what the sales team actually said in
+  // 8X showed a dash, because that text lives in lead_notes and was only ever
+  // opened one lead at a time. Newest per lead wins; one query for the page.
   let noteCounts: Record<string, number> = {};
+  let lastNotes: Record<string, { body: string; author: string | null; at: string | null }> = {};
   if (leads.length > 0) {
     const { data: notes } = await db
       .from("lead_notes")
-      .select("lead_id")
+      .select("lead_id,body,author,created_at")
       .eq("kind", "note")
       .in(
         "lead_id",
         leads.map((l) => l.lead_id)
-      );
-    noteCounts = (notes ?? []).reduce<Record<string, number>>((acc, n: { lead_id: string }) => {
-      acc[n.lead_id] = (acc[n.lead_id] ?? 0) + 1;
-      return acc;
-    }, {});
+      )
+      .order("created_at", { ascending: false });
+
+    for (const n of (notes ?? []) as { lead_id: string; body: string | null; author: string | null; created_at: string | null }[]) {
+      noteCounts[n.lead_id] = (noteCounts[n.lead_id] ?? 0) + 1;
+      if (!lastNotes[n.lead_id] && n.body?.trim()) {
+        lastNotes[n.lead_id] = { body: n.body.trim(), author: n.author, at: n.created_at };
+      }
+    }
   }
 
   // The wording of the forms, so the client can show the question and answer
@@ -101,6 +114,11 @@ export async function GET(req: NextRequest) {
     ok: true,
     count,
     dictionary: buildDictionary((forms ?? []) as unknown as FormSchema[]),
-    leads: leads.map((l) => ({ ...l, note_count: noteCounts[l.lead_id] ?? 0, rank: rankOf(l.status) })),
+    leads: leads.map((l) => ({
+      ...l,
+      note_count: noteCounts[l.lead_id] ?? 0,
+      last_note: lastNotes[l.lead_id] ?? null,
+      rank: rankOf(l.status),
+    })),
   });
 }

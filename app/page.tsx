@@ -47,6 +47,7 @@ function Dashboard() {
   const [statusFilter, setStatusFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [scope, setScope] = useState("all");
+  const [adset, setAdset] = useState("all");
   // One ad account at a time - there is deliberately no "everything at once"
   // view. Mixing two Businesses' leads and spend in one set of numbers is how
   // totals stop meaning anything; the switcher swaps worlds instead.
@@ -69,7 +70,8 @@ function Dashboard() {
       setErr(null);
       try {
         const leadQs = new URLSearchParams({
-          status: statusFilter, campaign: scope, account, ...(search ? { q: search } : {}),
+          status: statusFilter, campaign: scope, account, adset,
+          ...(search ? { q: search } : {}),
         });
         const analyticsQs = new URLSearchParams({ campaign: scope, account });
 
@@ -100,13 +102,13 @@ function Dashboard() {
         setLoading(false);
       }
     },
-    [pw, statusFilter, search, scope, account]
+    [pw, statusFilter, search, scope, account, adset]
   );
 
   useEffect(() => {
     if (authed) load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authed, statusFilter, scope, account]);
+  }, [authed, statusFilter, scope, account, adset]);
 
   // "" only happens on the very first visit, or when the remembered account
   // has since been disconnected. Snap to a real account - preferring one that
@@ -203,6 +205,7 @@ function Dashboard() {
                     // that looks broken rather than filtered.
                     setAccount(e.target.value);
                     setScope("all");
+                    setAdset("all");
                   }}
                   className="tap max-w-[11rem] rounded-lg border border-brand-300 bg-brand-50 px-3 py-1.5 text-xs font-medium text-brand-800 shadow-card sm:max-w-none"
                 >
@@ -216,7 +219,13 @@ function Dashboard() {
               {campaignOptions.length > 1 && (
                 <select
                   value={scope}
-                  onChange={(e) => setScope(e.target.value)}
+                  onChange={(e) => {
+                    // An ad set belongs to one campaign, so a campaign change
+                    // makes the held ad set impossible - and an impossible
+                    // filter renders an empty page that looks broken.
+                    setScope(e.target.value);
+                    setAdset("all");
+                  }}
                   className="tap max-w-[10rem] rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs shadow-card sm:max-w-none"
                 >
                   <option value="all">{t.allCampaigns}</option>
@@ -277,6 +286,11 @@ function Dashboard() {
             leads={leads}
             dictionary={dictionary}
             loading={loading}
+            adsets={(analytics?.adsets ?? []).filter(
+              (a) => scope === "all" || a.campaign_id === scope
+            )}
+            adset={adset}
+            onAdset={setAdset}
             statusFilter={statusFilter}
             onStatusFilter={setStatusFilter}
             search={search}

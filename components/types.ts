@@ -14,6 +14,7 @@ export type Lead = {
   submitted_at: string;
   campaign_id: string | null;
   campaign_name: string | null;
+  adset_id: string | null;
   adset_name: string | null;
   ad_id: string | null;
   ad_name: string | null;
@@ -22,6 +23,8 @@ export type Lead = {
   raw_fields: Record<string, string> | null;
   quality_score?: number | null;
   note_count?: number;
+  /** Newest note on this lead - usually what the agent wrote in 8X. */
+  last_note?: { body: string; author: string | null; at: string | null } | null;
   rank?: number;
 };
 
@@ -108,6 +111,8 @@ export type Analytics = {
   mixedCurrency?: boolean;
   scope: string | null;
   campaigns: { id: string; name: string }[];
+  /** Ad sets that actually have leads in the current scope. */
+  adsets?: { id: string; name: string; campaign_id: string | null }[];
   /** One row per campaign, same yardstick — present only when scope is "all". */
   campaignBoard?: CampaignBoardRow[] | null;
   /** Straight from Meta — nothing here is derived from our lead table. */

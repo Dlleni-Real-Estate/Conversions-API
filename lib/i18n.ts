@@ -31,6 +31,8 @@ export const DICT = {
     refreshHint: "Leads arrive on their own every 10 minutes — this re-reads what is already stored",
     updated: "Updated",
     allCampaigns: "All campaigns",
+    allAdsets: "All ad sets",
+    adsetFilterHint: "Show only leads from one ad set",
     loading: "Loading…",
     noData: "No data yet.",
 
@@ -308,6 +310,8 @@ export const DICT = {
     refreshHint: "الليدز بتيجي لوحدها كل ١٠ دقايق — الزرار ده بس بيعيد قراءة اللي متخزّن",
     updated: "آخر تحديث",
     allCampaigns: "كل الكمبينات",
+    allAdsets: "كل الـ Ad Sets",
+    adsetFilterHint: "اعرض ليدز Ad Set واحد بس",
     loading: "بيحمّل…",
     noData: "مفيش بيانات لسه.",
 

@@ -66,7 +66,7 @@ export async function GET(req: NextRequest) {
   let leadQuery = db
     .from("leads")
     .select(
-      "lead_id,status,submitted_at,status_at,deal_value,ad_id,ad_name,campaign_id,campaign_name,platform,raw_fields,quality_score,ad_account_id"
+      "lead_id,status,submitted_at,status_at,deal_value,ad_id,ad_name,campaign_id,campaign_name,platform,raw_fields,quality_score,ad_account_id,adset_id,adset_name"
     )
     .order("submitted_at", { ascending: false })
     .limit(5000);
@@ -332,6 +332,20 @@ export async function GET(req: NextRequest) {
     ([id, name]) => ({ id: id as string, name: name as string })
   );
 
+  // Ad sets present in whatever is in scope, so the leads picker only ever
+  // offers a set that has leads to show. Keyed by id: Ads Manager lets two
+  // ad sets share a name, and names get edited under you.
+  const adsets = [
+    ...new Map(
+      leads
+        .filter((l) => (l as { adset_id?: string | null }).adset_id)
+        .map((l) => {
+          const r = l as unknown as { adset_id: string; adset_name: string | null; campaign_id: string | null };
+          return [r.adset_id, { name: r.adset_name, campaign_id: r.campaign_id }] as const;
+        })
+    ).entries(),
+  ].map(([id, v]) => ({ id, name: v.name ?? id, campaign_id: v.campaign_id }));
+
   // ── Campaigns side by side ───────────────────────────────────────────────
   // Only when the whole account is in scope — inside one campaign the board
   // would just repeat the headline numbers. Each row is one campaign measured
@@ -402,6 +416,7 @@ export async function GET(req: NextRequest) {
       enabled: Boolean(a.enabled),
     })),
     campaigns,
+    adsets,
     // Verbatim from Meta — nothing here is derived from our own lead table.
     meta,
     // Our pipeline. Cost-per-stage divides Meta's spend by OUR counts, which is
