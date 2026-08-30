@@ -62,6 +62,39 @@ export default function AnalyticsView({
     return rows;
   }, [data.ads, sort]);
 
+  /**
+   * The ads, cut by ad set.
+   *
+   * A campaign's ad sets are the thing being tested against each other, and
+   * this account makes the flat list actively misleading: the CAPI test reuses
+   * every creative name from the original set, so "03 · Reel" appears twice
+   * and the two rows sit wherever spend happens to put them. Grouped by ad
+   * set, and keyed on the ad set's ID rather than its name, the comparison is
+   * the one the eye actually wants to make.
+   *
+   * `ads` is already in the chosen sort order, so rows keep it inside each
+   * group; the groups themselves are ordered by spend, biggest first.
+   */
+  const adGroups = useMemo(() => {
+    const m = new Map<
+      string,
+      { key: string; name: string; rows: AdRow[]; spend: number; leads: number; qualified: number; worked: number }
+    >();
+    for (const a of ads) {
+      const key = a.adset_id || a.adset_name || "—";
+      const g =
+        m.get(key) ??
+        { key, name: a.adset_name || t.noAdset, rows: [], spend: 0, leads: 0, qualified: 0, worked: 0 };
+      g.rows.push(a);
+      g.spend += Number(a.spend ?? 0);
+      g.leads += Number(a.leads ?? 0);
+      g.qualified += Number(a.qualified ?? 0);
+      g.worked += Number(a.worked ?? 0);
+      m.set(key, g);
+    }
+    return [...m.values()].sort((x, y) => y.spend - x.spend);
+  }, [ads, t]);
+
   const maxFunnel = data.funnel[0]?.count ?? 1;
   const statusRows = STAGES.map((st) => ({ ...st, count: data.byStatus?.[st.status as Status] ?? 0 })).filter(
     (st) => st.count > 0
@@ -332,7 +365,7 @@ export default function AnalyticsView({
       {/* ── Per-ad performance ─────────────────────────────────────────────── */}
       <Card
         title={t.adPerf}
-        subtitle={t.adPerfSub}
+        subtitle={t.adPerfGrouped}
         right={
           <button
             onClick={() => setWide((v) => !v)}
@@ -349,8 +382,20 @@ export default function AnalyticsView({
             {/* Phone: an 18-column table is unusable on a thumb, so each ad
                 becomes a card carrying only the numbers that change a
                 decision. */}
-          <ul className="divide-y divide-slate-200 md:hidden">
-            {ads.map((a) => (
+          <div className="md:hidden">
+            {adGroups.map((g) => (
+              <section key={g.key}>
+                <h3
+                  dir="auto"
+                  className="border-y border-slate-200 bg-slate-100 px-4 py-2 text-xs font-semibold text-slate-700"
+                >
+                  {g.name}
+                  <span className="ms-2 font-normal tabular-nums text-slate-500">
+                    {fmtMoney(g.spend, currency)} · {fmtInt(g.leads)} {t.leadsUnit}
+                  </span>
+                </h3>
+                <ul className="divide-y divide-slate-200">
+            {g.rows.map((a) => (
               <li key={a.ad_id} className="px-4 py-3.5">
                 <div className="flex items-baseline justify-between gap-3">
                   <span dir="auto" className="truncate font-semibold text-slate-900">{a.ad_name || "—"}</span>
@@ -358,7 +403,6 @@ export default function AnalyticsView({
                     {fmtMoney(a.spend, currency)}
                   </span>
                 </div>
-                <div dir="auto" className="mt-0.5 truncate text-[11px] text-slate-400">{a.adset_name || ""}</div>
 
                 <dl className="mt-2.5 grid grid-cols-3 gap-2 text-center">
                   {[
@@ -377,7 +421,10 @@ export default function AnalyticsView({
                 </dl>
               </li>
             ))}
-          </ul>
+                </ul>
+              </section>
+            ))}
+          </div>
 
           <div className="hidden overflow-x-auto md:block">
             <table className="w-full text-sm">
@@ -398,16 +445,46 @@ export default function AnalyticsView({
                   ))}
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-200">
-                {ads.map((a) => (
+              {/* One tbody per ad set: a real group, with its own subtotal
+                  row, rather than a flat list where two ads sharing a creative
+                  name land wherever spend happens to put them. */}
+              {adGroups.map((g) => (
+              <tbody key={g.key} className="divide-y divide-slate-200 border-b-2 border-slate-200">
+                <tr className="bg-slate-100/80">
+                  <Td className="py-2">
+                    <span dir="auto" className="text-xs font-semibold text-slate-700">{g.name}</span>
+                  </Td>
+                  <Td align="right" className="py-2 text-xs font-semibold text-slate-700">
+                    {fmtMoney(g.spend, currency)}
+                  </Td>
+                  <Td align="right" className="py-2 text-xs font-semibold text-slate-700">
+                    {fmtInt(g.leads)}
+                  </Td>
+                  {columns.slice(3).map((c) => (
+                    <Td key={c.key} align="right" className="py-2 text-xs text-slate-500">
+                      {c.key === "qualified_pct"
+                        ? g.worked === 0
+                          ? "—"
+                          : fmtPct(Math.round((1000 * g.qualified) / g.leads) / 10)
+                        : c.key === "qualified"
+                          ? fmtInt(g.qualified)
+                          : c.key === "cost_per_lead"
+                            ? fmtMoney2(g.leads ? g.spend / g.leads : null, currency)
+                            : c.key === "cost_per_qualified"
+                              ? fmtMoney2(g.qualified ? g.spend / g.qualified : null, currency)
+                              : ""}
+                    </Td>
+                  ))}
+                </tr>
+                {g.rows.map((a) => (
                   <tr key={a.ad_id} className="even:bg-slate-50/70 hover:bg-sky-50">
                     {columns.map((c) => {
                       const v = a[c.key];
                       if (c.kind === "text") {
                         return (
                           <Td key={c.key}>
-                            <div dir="auto" className="font-medium text-slate-900">{a.ad_name || "—"}</div>
-                            <div dir="auto" className="text-xs text-slate-400">{a.adset_name || ""}</div>
+                            <div dir="auto" className="ps-3 font-medium text-slate-900">{a.ad_name || "—"}</div>
+                            <div dir="auto" className="ps-3 text-xs text-slate-400">{a.campaign_name || ""}</div>
                           </Td>
                         );
                       }
@@ -442,6 +519,7 @@ export default function AnalyticsView({
                   </tr>
                 ))}
               </tbody>
+              ))}
             </table>
           </div>
           </>

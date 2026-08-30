@@ -31,6 +31,7 @@ export type Lead = {
 export type AdRow = {
   ad_id: string;
   ad_name: string | null;
+  adset_id?: string | null;
   adset_name: string | null;
   campaign_id: string | null;
   campaign_name: string | null;

@@ -103,6 +103,12 @@ export async function GET(req: NextRequest) {
   let optionsQuery = db.from("leads").select("campaign_id,campaign_name,adset_id,adset_name").limit(5000);
   if (account) optionsQuery = optionsQuery.eq("ad_account_id", account);
 
+  // ad_performance predates ad sets and carries only the NAME. Grouping the
+  // table on a name would merge two ad sets that happen to share one - which
+  // this account already has, twice over, since the CAPI test reuses every
+  // creative name from the original set. So the id is stamped on per ad.
+  const adsetOfAdQuery = db.from("ad_insights").select("ad_id,adset_id,adset_name");
+
   const [
     { data: leadsRaw, error: leadErr },
     { data: adsRaw, error: adErr },
@@ -110,6 +116,7 @@ export async function GET(req: NextRequest) {
     { data: ciRaw },
     adsetRes,
     { data: optionRows },
+    { data: adsetOfAd },
   ] = await Promise.all([
     leadQuery,
     adQuery,
@@ -117,6 +124,7 @@ export async function GET(req: NextRequest) {
     ciQuery,
     adsetInsightsQuery ?? Promise.resolve({ data: null }),
     optionsQuery,
+    adsetOfAdQuery,
   ]);
 
   const dict = buildDictionary((formRows ?? []) as unknown as FormSchema[]);
@@ -144,6 +152,20 @@ export async function GET(req: NextRequest) {
     for (const row of ads) {
       const hit = perAd.get(String(row.ad_id ?? ""));
       row.avg_quality = hit ? Math.round(hit.sum / hit.n) : null;
+    }
+  }
+
+  {
+    const byAd = new Map(
+      ((adsetOfAd ?? []) as { ad_id: string; adset_id: string | null; adset_name: string | null }[]).map((r) => [
+        String(r.ad_id),
+        r,
+      ])
+    );
+    for (const row of ads) {
+      const hit = byAd.get(String(row.ad_id ?? ""));
+      row.adset_id = hit?.adset_id ?? null;
+      if (!row.adset_name && hit?.adset_name) row.adset_name = hit.adset_name;
     }
   }
   const ci = (ciRaw ?? []) as CampaignInsightRow[];
