@@ -63,6 +63,11 @@ export async function GET(req: NextRequest) {
   const accountParam = (req.nextUrl.searchParams.get("account") || "").replace(/^act_/, "");
   const account = accountParam && accountParam !== "all" ? accountParam : null;
 
+  // One ad set at a time - the comparison that actually decides budget, since
+  // a campaign's ad sets are the thing being tested against each other.
+  const adsetParam = req.nextUrl.searchParams.get("adset");
+  const adset = adsetParam && adsetParam !== "all" ? adsetParam : null;
+
   let leadQuery = db
     .from("leads")
     .select(
@@ -72,6 +77,7 @@ export async function GET(req: NextRequest) {
     .limit(5000);
   if (scoped) leadQuery = leadQuery.eq("campaign_id", scoped);
   if (account) leadQuery = leadQuery.eq("ad_account_id", account);
+  if (adset) leadQuery = leadQuery.eq("adset_id", adset);
 
   let adQuery = db.from("ad_performance").select("*");
   if (scoped) adQuery = adQuery.eq("campaign_id", scoped);
@@ -80,13 +86,38 @@ export async function GET(req: NextRequest) {
   if (scoped) ciQuery = ciQuery.eq("campaign_id", scoped);
   if (account) ciQuery = ciQuery.eq("ad_account_id", account);
 
-  const [{ data: leadsRaw, error: leadErr }, { data: adsRaw, error: adErr }, { data: formRows }, { data: ciRaw }] =
-    await Promise.all([
-      leadQuery,
-      adQuery,
-      db.from("lead_forms").select("form_id, name, locale, questions"),
-      ciQuery,
-    ]);
+  // Meta reports no ad-set row, only campaign rows and ad rows. So inside one
+  // ad set the delivery numbers are summed from ITS ads. The partition is
+  // exact - an ad belongs to exactly one ad set, and the ad rows summed back
+  // up match the campaign row - though the two are fetched by separate calls,
+  // so mid-day they can sit a few pounds apart until the next sync.
+  const adsetInsightsQuery = adset
+    ? db.from("ad_insights").select("*").eq("adset_id", adset)
+    : null;
+
+  // What the pickers offer has to be everything you could switch TO, so it is
+  // read WITHOUT the campaign and ad-set filters applied. Deriving it from the
+  // filtered leads collapsed the list to the one option already chosen, and a
+  // picker with one option hides itself - which strands you inside the filter
+  // with no way back to "all".
+  let optionsQuery = db.from("leads").select("campaign_id,campaign_name,adset_id,adset_name").limit(5000);
+  if (account) optionsQuery = optionsQuery.eq("ad_account_id", account);
+
+  const [
+    { data: leadsRaw, error: leadErr },
+    { data: adsRaw, error: adErr },
+    { data: formRows },
+    { data: ciRaw },
+    adsetRes,
+    { data: optionRows },
+  ] = await Promise.all([
+    leadQuery,
+    adQuery,
+    db.from("lead_forms").select("form_id, name, locale, questions"),
+    ciQuery,
+    adsetInsightsQuery ?? Promise.resolve({ data: null }),
+    optionsQuery,
+  ]);
 
   const dict = buildDictionary((formRows ?? []) as unknown as FormSchema[]);
 
@@ -117,6 +148,15 @@ export async function GET(req: NextRequest) {
   }
   const ci = (ciRaw ?? []) as CampaignInsightRow[];
 
+  // Inside an ad set, its own ad rows ARE the delivery numbers. Same shape as
+  // a campaign row for every field the block below reads, so the arithmetic
+  // underneath is untouched - only the source changes.
+  const adsetRows = ((adsetRes?.data ?? null) as CampaignInsightRow[] | null) ?? null;
+  if (adset) {
+    const mine = new Set((adsetRows ?? []).map((r) => String((r as unknown as { ad_id: string }).ad_id)));
+    ads = ads.filter((r) => mine.has(String(r.ad_id ?? "")));
+  }
+
   if (account) {
     const allowed = new Set<string>([
       ...ci.map((r) => r.campaign_id),
@@ -135,21 +175,26 @@ export async function GET(req: NextRequest) {
   //
   // Spend, impressions and clicks are events, so they add. CTR, CPC and CPM
   // are ratios of those, so recomputing them from the sums is exact.
-  const sum = (k: keyof CampaignInsightRow) => ci.reduce((acc, r) => acc + Number(r[k] ?? 0), 0);
+  // Campaign rows normally; one ad set's ad rows when an ad set is in scope.
+  const metaRows: CampaignInsightRow[] = adset ? adsetRows ?? [] : ci;
 
-  const single = ci.length === 1 ? ci[0] : null;
+  const sum = (k: keyof CampaignInsightRow) => metaRows.reduce((acc, r) => acc + Number(r[k] ?? 0), 0);
+
+  // Reach counts PEOPLE and Meta has already deduplicated them, so it is only
+  // ever exact for a single row - one campaign, or one ad inside an ad set.
+  const single = metaRows.length === 1 ? metaRows[0] : null;
   const spend = money(sum("spend"));
   const impressions = sum("impressions");
   const clicks = sum("clicks");
   const linkClicks = sum("link_clicks");
   const metaLeads = sum("meta_leads");
-  const currency = ci.find((r) => r.currency)?.currency ?? "EGP";
+  const currency = metaRows.find((r) => r.currency)?.currency ?? "EGP";
 
   // With more than one ad account, spend can arrive in more than one currency.
   // Adding those is meaningless, so the fact is reported rather than hidden:
   // the totals still add (they have to add to something), and the dashboard
   // says out loud that they are mixed instead of printing a confident number.
-  const currencies = [...new Set(ci.map((r) => r.currency).filter(Boolean))] as string[];
+  const currencies = [...new Set(metaRows.map((r) => r.currency).filter(Boolean))] as string[];
   const mixedCurrency = currencies.length > 1;
 
   const meta = {
@@ -160,7 +205,7 @@ export async function GET(req: NextRequest) {
     // Deduplicated people — only trustworthy for a single campaign.
     reach: single ? Number(single.reach) : null,
     frequency: single ? Number(single.frequency) : null,
-    reach_exact: ci.length <= 1,
+    reach_exact: metaRows.length <= 1,
     ctr: impressions ? Math.round((10000 * clicks) / impressions) / 100 : null,
     cpc: clicks ? money(spend / clicks) : null,
     cpm: impressions ? money((spend / impressions) * 1000) : null,
@@ -169,9 +214,9 @@ export async function GET(req: NextRequest) {
     currency,
     // Meta's reporting lags — showing the window it covers is what stops this
     // looking like a bug when the CRM already has leads Meta has not counted.
-    date_start: ci.map((r) => r.date_start).filter(Boolean).sort()[0] ?? null,
-    date_stop: ci.map((r) => r.date_stop).filter(Boolean).sort().reverse()[0] ?? null,
-    campaigns: ci.length,
+    date_start: metaRows.map((r) => r.date_start).filter(Boolean).sort()[0] ?? null,
+    date_stop: metaRows.map((r) => r.date_stop).filter(Boolean).sort().reverse()[0] ?? null,
+    campaigns: metaRows.length,
   };
 
   const reach = meta.reach ?? 0;
@@ -312,7 +357,10 @@ export async function GET(req: NextRequest) {
           reservations: r.reservations,
           qualified_pct: anyWorked ? pct(r.qualified, r.leads) : null,
         }))
-        .sort((a, b) => b.leads - a.leads),
+        // Best first. The card exists to rank answers by how well they
+        // separate good leads from bad, so ranking them by popularity buried
+        // the answer with the highest rate at the bottom of the list.
+        .sort((a, b) => (b.qualified_pct ?? -1) - (a.qualified_pct ?? -1) || b.leads - a.leads),
     }))
     .filter((s) => s.values.length > 1)
     .sort((a, b) => b.values.length - a.values.length);
@@ -328,21 +376,26 @@ export async function GET(req: NextRequest) {
     };
   });
 
-  const campaigns = [...new Map(leads.filter((l) => l.campaign_id).map((l) => [l.campaign_id, l.campaign_name])).entries()].map(
-    ([id, name]) => ({ id: id as string, name: name as string })
-  );
+  type OptionRow = {
+    campaign_id: string | null;
+    campaign_name: string | null;
+    adset_id: string | null;
+    adset_name: string | null;
+  };
+  const opts = (optionRows ?? []) as OptionRow[];
+
+  const campaigns = [
+    ...new Map(opts.filter((o) => o.campaign_id).map((o) => [o.campaign_id as string, o.campaign_name])).entries(),
+  ].map(([id, name]) => ({ id, name: name ?? id }));
 
   // Ad sets present in whatever is in scope, so the leads picker only ever
   // offers a set that has leads to show. Keyed by id: Ads Manager lets two
   // ad sets share a name, and names get edited under you.
   const adsets = [
     ...new Map(
-      leads
-        .filter((l) => (l as { adset_id?: string | null }).adset_id)
-        .map((l) => {
-          const r = l as unknown as { adset_id: string; adset_name: string | null; campaign_id: string | null };
-          return [r.adset_id, { name: r.adset_name, campaign_id: r.campaign_id }] as const;
-        })
+      opts
+        .filter((o) => o.adset_id)
+        .map((o) => [o.adset_id as string, { name: o.adset_name, campaign_id: o.campaign_id }] as const)
     ).entries(),
   ].map(([id, v]) => ({ id, name: v.name ?? id, campaign_id: v.campaign_id }));
 
@@ -353,8 +406,10 @@ export async function GET(req: NextRequest) {
   // Campaigns appear whether they came from insights (spend but no leads yet)
   // or from leads (leads but insights not refreshed yet) — a campaign missing
   // from one source must not vanish from the board.
+  // An ad set belongs to one campaign, so inside one the board would be a
+  // single row restating the headline.
   let campaignBoard: Record<string, unknown>[] | null = null;
-  if (!scoped) {
+  if (!scoped && !adset) {
     const ids = new Set<string>([
       ...ci.map((r) => r.campaign_id),
       ...leads.map((l) => l.campaign_id).filter((v): v is string => Boolean(v)),
@@ -409,6 +464,7 @@ export async function GET(req: NextRequest) {
     mixedCurrency,
     scope: scoped,
     account,
+    adset,
     accounts: (accountRows ?? []).map((a) => ({
       ad_account_id: a.ad_account_id as string,
       name: (a.name as string | null) ?? null,

@@ -510,7 +510,6 @@ export default function AnalyticsView({
         ) : (
           <div className="grid gap-6 px-5 py-4 lg:grid-cols-2">
             {data.segments.map((seg) => {
-              const max = Math.max(...seg.values.map((v) => v.leads), 1);
               return (
                 <div key={seg.field}>
                   <h3 dir="auto" className="text-xs font-semibold text-slate-600">{seg.label || seg.field}</h3>
@@ -524,25 +523,45 @@ export default function AnalyticsView({
                             {v.qualified_pct === null ? (
                               <span className="text-slate-400">—</span>
                             ) : (
-                              <span className={Number(v.qualified_pct) >= 30 ? "text-emerald-600" : "text-slate-400"}>
+                              <span
+                                className={
+                                  v.leads < 10
+                                    ? "text-slate-400"
+                                    : Number(v.qualified_pct) >= 30
+                                      ? "text-emerald-600"
+                                      : "text-slate-500"
+                                }
+                                title={v.leads < 10 ? t.smallSample : undefined}
+                              >
                                 {fmtPct(v.qualified_pct)} {t.qualShort}
+                                {v.leads < 10 ? " *" : ""}
                               </span>
                             )}
                           </span>
                         </div>
                         <div className="mt-1">
-                          {/* Colour carries the verdict: an answer that turns
-                              into qualified leads is green, one that does not
-                              is grey. */}
+                          {/* The bar is the QUALIFICATION RATE, on a fixed 0-100
+                              scale. It used to be the lead count, which read
+                              exactly backwards: the answer with the best rate
+                              in the whole card (80%) drew the shortest bar
+                              because only five people picked it, while the most
+                              popular answer looked like the best one. Length
+                              and colour now say the same thing.
+
+                              Below ten leads a rate is noise - one more call
+                              moves it twenty points - so those are drawn grey
+                              and labelled instead of ranked on. */}
                           <Bar
-                            value={v.leads}
-                            max={max}
+                            value={v.qualified_pct === null ? 0 : Number(v.qualified_pct)}
+                            max={100}
                             color={
-                              Number(v.qualified_pct) >= 40
-                                ? "#059669"
-                                : Number(v.qualified_pct) >= 15
-                                  ? "#f59e0b"
-                                  : "#cbd5e1"
+                              v.leads < 10
+                                ? "#cbd5e1"
+                                : Number(v.qualified_pct) >= 40
+                                  ? "#059669"
+                                  : Number(v.qualified_pct) >= 15
+                                    ? "#f59e0b"
+                                    : "#ef4444"
                             }
                           />
                         </div>

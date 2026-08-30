@@ -36,9 +36,6 @@ export default function LeadsView({
   loading,
   statusFilter,
   onStatusFilter,
-  adsets,
-  adset,
-  onAdset,
   search,
   onSearch,
   onOpen,
@@ -49,9 +46,6 @@ export default function LeadsView({
   loading: boolean;
   statusFilter: string;
   onStatusFilter: (v: string) => void;
-  adsets: { id: string; name: string; campaign_id: string | null }[];
-  adset: string;
-  onAdset: (v: string) => void;
   search: string;
   onSearch: (v: string) => void;
   onOpen: (lead: Lead) => void;
@@ -149,21 +143,6 @@ export default function LeadsView({
           </option>
         ))}
       </select>
-      {adsets.length > 1 && (
-        <select
-          value={adset}
-          onChange={(e) => onAdset(e.target.value)}
-          className="tap col-span-2 min-w-0 max-w-[13rem] rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs shadow-card sm:col-span-1"
-          title={t.adsetFilterHint}
-        >
-          <option value="all">{t.allAdsets}</option>
-          {adsets.map((a) => (
-            <option key={a.id} value={a.id}>
-              {a.name}
-            </option>
-          ))}
-        </select>
-      )}
       <input
         value={search}
         onChange={(e) => onSearch(e.target.value)}
@@ -176,7 +155,7 @@ export default function LeadsView({
   return (
     <Card
       title={t.leads}
-      subtitle={`${leads.length} ${t.shown}${statusFilter !== "all" || adset !== "all" ? ` · ${t.filtered}` : ""}`}
+      subtitle={`${leads.length} ${t.shown}${statusFilter !== "all" ? ` · ${t.filtered}` : ""}`}
       right={<div className="hidden sm:block">{Controls}</div>}
     >
       <div className="border-b border-slate-200 bg-slate-50 px-4 py-3 sm:hidden">{Controls}</div>

@@ -103,6 +103,8 @@ export type Analytics = {
   ok: boolean;
   /** Which single ad account the whole payload is narrowed to, null = all. */
   account?: string | null;
+  /** Which single ad set, null = all of them. */
+  adset?: string | null;
   /** Every connected account, for the header switcher and the board badges. */
   accounts?: AccountRef[];
   currency: string;

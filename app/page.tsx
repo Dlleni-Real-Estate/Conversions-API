@@ -73,7 +73,7 @@ function Dashboard() {
           status: statusFilter, campaign: scope, account, adset,
           ...(search ? { q: search } : {}),
         });
-        const analyticsQs = new URLSearchParams({ campaign: scope, account });
+        const analyticsQs = new URLSearchParams({ campaign: scope, account, adset });
 
         const [leadRes, statsRes] = await Promise.all([
           fetch(`/api/leads?${leadQs}`, { headers: { "x-app-password": password } }),
@@ -177,6 +177,11 @@ function Dashboard() {
   }
 
   const campaignOptions = analytics?.campaigns ?? [];
+  // Only the ad sets of the campaign in scope: an ad set belongs to exactly
+  // one campaign, so offering the rest would just be a dead end.
+  const adsetOptions = (analytics?.adsets ?? []).filter(
+    (a) => scope === "all" || a.campaign_id === scope
+  );
   // Leads nobody has called yet. Surfaced on the tab so it is visible from any
   // screen — a queue you cannot see is a queue nobody works.
   const untouched = leads.filter((l) => l.status === "new").length;
@@ -212,6 +217,21 @@ function Dashboard() {
                   {analytics?.accounts?.map((a) => (
                     <option key={a.ad_account_id} value={a.ad_account_id}>
                       {(a.name || a.ad_account_id) + (a.business_name ? ` \u2014 ${a.business_name}` : "")}
+                    </option>
+                  ))}
+                </select>
+              )}
+              {adsetOptions.length > 1 && (
+                <select
+                  value={adset}
+                  onChange={(e) => setAdset(e.target.value)}
+                  className="tap max-w-[11rem] rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs shadow-card sm:max-w-none"
+                  title={t.adsetFilterHint}
+                >
+                  <option value="all">{t.allAdsets}</option>
+                  {adsetOptions.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.name}
                     </option>
                   ))}
                 </select>
@@ -286,11 +306,6 @@ function Dashboard() {
             leads={leads}
             dictionary={dictionary}
             loading={loading}
-            adsets={(analytics?.adsets ?? []).filter(
-              (a) => scope === "all" || a.campaign_id === scope
-            )}
-            adset={adset}
-            onAdset={setAdset}
             statusFilter={statusFilter}
             onStatusFilter={setStatusFilter}
             search={search}
