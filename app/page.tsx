@@ -136,6 +136,48 @@ function Dashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search]);
 
+  /**
+   * Whatever is on screen, as a spreadsheet.
+   *
+   * The request carries the SAME filters the list is showing, so there is no
+   * second idea of "the current selection" that could drift from the first.
+   * It goes through fetch rather than a plain link because the API is behind
+   * the app password, and a link cannot carry a header.
+   */
+  const [exporting, setExporting] = useState(false);
+  const exportCsv = useCallback(async () => {
+    setExporting(true);
+    setErr(null);
+    try {
+      const qs = new URLSearchParams({
+        status: statusFilter,
+        campaign: scope,
+        account,
+        adset,
+        lang: locale.startsWith("ar") ? "ar" : "en",
+        ...(search ? { q: search } : {}),
+      });
+      const res = await fetch(`/api/export?${qs}`, { headers: { "x-app-password": pw } });
+      if (!res.ok) {
+        setErr(t.exportFailed);
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `leads-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch {
+      setErr(t.connectionError);
+    } finally {
+      setExporting(false);
+    }
+  }, [pw, statusFilter, scope, account, adset, search, locale, t]);
+
   /** Patch a lead in place so the table updates without a full reload. */
   const onChanged = useCallback((lead: Lead, patch: Partial<Lead>) => {
     setLeads((prev) => prev.map((l) => (l.lead_id === lead.lead_id ? { ...l, ...patch } : l)));
@@ -312,6 +354,8 @@ function Dashboard() {
             onSearch={setSearch}
             onOpen={setSelected}
             selectedId={selected?.lead_id ?? null}
+            onExport={exportCsv}
+            exporting={exporting}
           />
         )}
 

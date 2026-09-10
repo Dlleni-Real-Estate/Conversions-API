@@ -40,6 +40,8 @@ export default function LeadsView({
   onSearch,
   onOpen,
   selectedId,
+  onExport,
+  exporting,
 }: {
   leads: Lead[];
   dictionary: FormDictionary | null;
@@ -50,6 +52,8 @@ export default function LeadsView({
   onSearch: (v: string) => void;
   onOpen: (lead: Lead) => void;
   selectedId: string | null;
+  onExport: () => void;
+  exporting: boolean;
 }) {
   const { t, s, lang, locale } = useLang();
   const [sort, setSort] = useState<Sort>("triage");
@@ -149,6 +153,16 @@ export default function LeadsView({
         placeholder={t.searchPlaceholder}
         className="tap col-span-2 min-w-0 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs shadow-card outline-none focus:border-brand-500 sm:col-span-1 sm:w-44"
       />
+      {/* Exports exactly what the filters above are showing - not the whole
+          table - so "these leads, in a sheet" is one click and no surprises. */}
+      <button
+        onClick={onExport}
+        disabled={exporting}
+        title={t.exportHint}
+        className="tap col-span-2 min-w-0 whitespace-nowrap rounded-lg border border-emerald-300 bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-800 shadow-card hover:bg-emerald-100 disabled:opacity-50 sm:col-span-1"
+      >
+        {exporting ? t.exporting : t.exportCsv}
+      </button>
     </div>
   );
 
