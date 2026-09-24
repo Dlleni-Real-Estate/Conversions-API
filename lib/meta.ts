@@ -400,6 +400,21 @@ async function graph<T>(path: string, params: Record<string, string>, token: str
 // for one Page is useless (and confusing) for the other.
 const pageTokenCache = new Map<string, string>();
 
+/**
+ * Pairings Meta has already refused to mint a Page token for.
+ *
+ * A refusal is a fact about permissions, not a transient error: the same page
+ * and token will be refused again a second later. Without this the AR Elite
+ * pairing cost SIX failed Graph round-trips per sync - once per lead-reading
+ * call - and those seconds are why the whole run started hitting the 60s
+ * function ceiling. Asked once, then straight to the fallback.
+ *
+ * Process-local, so a fresh Lambda always re-checks: a permission genuinely
+ * granted in Business Settings is picked up on the next cold start rather
+ * than being cached away forever.
+ */
+const pageTokenRefused = new Map<string, string>();
+
 export async function getPageToken(scope?: AccountScope): Promise<string> {
   const token = scope?.token || metaConfig().token;
   const pageId = scope?.pageId || metaConfig().pageId;
@@ -410,12 +425,24 @@ export async function getPageToken(scope?: AccountScope): Promise<string> {
   const cached = pageTokenCache.get(cacheKey);
   if (cached) return cached;
 
-  const data = await graph<{ access_token?: string }>(`/${pageId}`, { fields: "access_token" }, token);
+  const refused = pageTokenRefused.get(cacheKey);
+  if (refused) throw new Error(refused);
+
+  let data: { access_token?: string };
+  try {
+    data = await graph<{ access_token?: string }>(`/${pageId}`, { fields: "access_token" }, token);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    pageTokenRefused.set(cacheKey, msg);
+    throw err;
+  }
+
   if (!data.access_token) {
-    throw new Error(
+    const msg =
       `No Page access token returned for Page ${pageId}. Assign the Page to this token's ` +
-        `System User with Full control, and make sure the token has pages_show_list + pages_manage_ads.`
-    );
+      `System User with Full control, and make sure the token has pages_show_list + pages_manage_ads.`;
+    pageTokenRefused.set(cacheKey, msg);
+    throw new Error(msg);
   }
   pageTokenCache.set(cacheKey, data.access_token);
   return data.access_token;
@@ -433,15 +460,21 @@ export async function getPageToken(scope?: AccountScope): Promise<string> {
  * arriving, no error anywhere. When the Page token cannot be minted and the
  * scope carries its own user token, that token reads the leads directly.
  */
+const warnedNoPageToken = new Set<string>();
+
 async function leadReadToken(scope?: AccountScope): Promise<string> {
   try {
     return await getPageToken(scope);
   } catch (err) {
     if (scope?.token) {
-      console.warn(
-        `[meta] no Page token for ${scope.pageId || "?"} - reading leads with the account's user token ` +
-          `(${err instanceof Error ? err.message.slice(0, 120) : err})`
-      );
+      const key = scope.pageId || "?";
+      if (!warnedNoPageToken.has(key)) {
+        warnedNoPageToken.add(key);
+        console.warn(
+          `[meta] no Page token for ${key} - reading leads with the account's user token ` +
+            `(${err instanceof Error ? err.message.slice(0, 120) : err})`
+        );
+      }
       return scope.token;
     }
     throw err;

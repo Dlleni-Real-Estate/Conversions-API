@@ -427,6 +427,25 @@ async function refreshFormSchemas(
   return schemas.length;
 }
 
+/** 8X refuses anything longer outright, so the text is trimmed, not lost. */
+const CRM_DESCRIPTION_MAX = 190;
+
+function fitDescription(lines: string[]): string {
+  const out: string[] = [];
+  let used = 0;
+  for (const line of lines) {
+    const cost = (out.length ? 1 : 0) + line.length;
+    if (used + cost > CRM_DESCRIPTION_MAX) {
+      // Half a sentence beats no sentence when it is the only line there is.
+      if (out.length === 0) return line.slice(0, CRM_DESCRIPTION_MAX - 1) + "\u2026";
+      break;
+    }
+    out.push(line);
+    used += cost;
+  }
+  return out.join("\n");
+}
+
 /**
  * Send leads the CRM has never seen into 8X, so somebody actually calls them.
  *
@@ -458,7 +477,7 @@ async function pushLeadsToCrm(
 
   const { data: due, error } = await db
     .from("leads")
-    .select("lead_id,full_name,phone,email,form_id,raw_fields,campaign_name,ad_name")
+    .select("lead_id,full_name,phone,email,form_id,raw_fields,campaign_name,ad_name,crm_push_error")
     .in("ad_account_id", ids)
     .is("crm_pushed_at", null)
     .not("phone", "is", null)
@@ -470,7 +489,7 @@ async function pushLeadsToCrm(
     return { pushed: 0, failed: 0, left: 0, skipped: error.message };
   }
 
-  const rows = (due ?? []) as {
+  const rows = (due ?? []) as unknown as {
     lead_id: string;
     full_name: string | null;
     phone: string | null;
@@ -479,11 +498,27 @@ async function pushLeadsToCrm(
     raw_fields: Record<string, string> | null;
     campaign_name: string | null;
     ad_name: string | null;
+    crm_push_error: string | null;
   }[];
   if (rows.length === 0) return { pushed: 0, failed: 0, left: 0 };
 
-  const batch = rows.slice(0, limit);
-  const left = rows.length > limit ? rows.length - limit : 0;
+  // A 4xx is a verdict on the payload, not a hiccup: the same body will be
+  // refused again forever. Retrying it every ten minutes is how thirteen leads
+  // ate a slice of every sync for nothing - and it is unstamped rows like
+  // these that pushed the run into the 60s ceiling. 429 is the exception: it
+  // means "later", not "no". The over-long description is the other one:
+  // fitDescription() below is the cure, so the leads refused for it before
+  // this deploy get exactly one more try instead of being parked for good.
+  const permanentlyRefused = (e: string | null) =>
+    !!e && /^HTTP 4/.test(e) && !/^HTTP 429/.test(e) &&
+    !/description may not be greater/.test(e);
+
+  const live = rows.filter((r) => !permanentlyRefused(r.crm_push_error));
+  const stuck = rows.length - live.length;
+  if (stuck > 0) console.warn(`[sync] crm push: ${stuck} lead(s) parked on a permanent refusal`);
+
+  const batch = live.slice(0, limit);
+  const left = live.length > limit ? live.length - limit : 0;
 
   // The question wording, so the agent opening the lead reads what the
   // customer read - not payment_plan: plan_0_6.
@@ -504,14 +539,19 @@ async function pushLeadsToCrm(
     // batch silenced stage feedback entirely. Whatever is left stays queued
     // for the next run ten minutes later.
     if (Date.now() - pushStarted > 15_000) break;
-    const lines: string[] = [];
-    if (lead.campaign_name) lines.push(lead.campaign_name);
-    if (lead.ad_name) lines.push(lead.ad_name);
+
+    // 8X caps this column at 191 characters and answers a longer one with a
+    // hard 422 - which is what refused every single push until the log said
+    // so. The customer's own answers go FIRST, so when the budget runs out it
+    // is the campaign name that falls off the end, never the thing the agent
+    // needs to read before dialling.
+    const answers: string[] = [];
     for (const [key, value] of Object.entries(lead.raw_fields ?? {})) {
       if (!value?.trim()) continue;
       if (/^(full_name|phone|email)$/i.test(key)) continue;   // already on the record
-      lines.push(`${questionLabel(dict, key)}: ${answerLabel(dict, key, value)}`);
+      answers.push(`${questionLabel(dict, key)}: ${answerLabel(dict, key, value)}`);
     }
+    const lines = [...answers, lead.campaign_name, lead.ad_name].filter(Boolean) as string[];
 
     let result;
     try {
@@ -520,7 +560,7 @@ async function pushLeadsToCrm(
         phone: lead.phone,
         email: lead.email,
         formId: lead.form_id,
-        description: lines.join("\n"),
+        description: fitDescription(lines),
       });
     } catch (err) {
       result = { ok: false, status: 0, body: err instanceof Error ? err.message : String(err) };
