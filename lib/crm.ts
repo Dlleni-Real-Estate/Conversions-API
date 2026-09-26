@@ -237,6 +237,7 @@ export const CRM_USER_TO_NAME: Record<number, string> = {
   11: "Mariam Helmy",          // Sherif Team
   12: "mohamed aboarab",       // Youstina Team
   13: "Ahmed Roshdy",          // Youstina Team
+  14: "Hanaa Sayd",            // read off a lead's 8X timeline; was "Agent #14"
   16: "Khaled Zakaria",        // Youstina Team
   17: "aya atef",              // Youstina Team
   18: "Ahmed Moustafa",        // Abdalla Team
@@ -338,6 +339,64 @@ export function pickLastNote(row: Record<string, unknown>): { body: string; auth
     if (typeof t === "string" && t.trim()) { at = t; break; }
   }
   return { body, author, at };
+}
+
+/** A timestamp string off a row, or null. 8X sends ISO strings in UTC. */
+function isoOrNull(v: unknown): string | null {
+  if (typeof v !== "string" || !v.trim()) return null;
+  const ms = Date.parse(v);
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+}
+
+/** When the lead appeared in 8X - the moment the team's clock starts. */
+export function pickCreatedAt(row: Record<string, unknown>): string | null {
+  return isoOrNull(row.created_at);
+}
+
+/**
+ * Every current assignee WITH the time they were given the lead.
+ *
+ * v4 carries assignees as [{id, created_at}], and that created_at is the one
+ * piece of routing history 8X exposes: when the team leader hands a lead to an
+ * agent, the agent's entry is stamped with that moment. Mirrored every run
+ * into lead_assignments, so an assignee who is later removed stays on record.
+ */
+export function pickAssignments(row: Record<string, unknown>): { userId: number; name: string; at: string }[] {
+  const v = row.assignees;
+  if (!Array.isArray(v)) return [];
+  const out: { userId: number; name: string; at: string }[] = [];
+  for (const entry of v) {
+    if (!entry || typeof entry !== "object") continue;
+    const o = entry as Record<string, unknown>;
+    const id = typeof o.id === "number" ? o.id : Number(o.id);
+    const at = isoOrNull(o.created_at) ?? isoOrNull((o.pivot as Record<string, unknown> | undefined)?.created_at);
+    if (!Number.isFinite(id) || !at) continue;
+    out.push({ userId: id, name: resolveUserName(id) ?? `Agent #${id}`, at });
+  }
+  return out;
+}
+
+/**
+ * The latest activity on the lead as an EVENT: who did it and when, whether or
+ * not they typed anything. pickLastNote() skips a logged call with no text,
+ * which is right for the notes timeline and wrong for measuring response time -
+ * "called, no answer" with nothing written is still the agent reaching out.
+ */
+export function pickLastActivity(
+  row: Record<string, unknown>
+): { actorId: number | null; actor: string; at: string; hasNote: boolean } | null {
+  const v = row.last_activity ?? row.lastActivity ?? null;
+  if (!v || typeof v !== "object") return null;
+  const o = v as Record<string, unknown>;
+  const at = isoOrNull(o.created_at) ?? isoOrNull(o.date) ?? isoOrNull(o.updated_at);
+  if (!at) return null;
+  const idNum = typeof o.created_by === "number" ? o.created_by : Number(o.created_by);
+  const actorId = Number.isFinite(idNum) ? idNum : null;
+  const actor = (actorId !== null ? resolveUserName(actorId) : null) ?? "";
+  const hasNote = ["notes", "description", "note", "body"].some(
+    (k) => typeof o[k] === "string" && (o[k] as string).trim().length > 0
+  );
+  return { actorId, actor, at, hasNote };
 }
 
 export function pickPhone(row: Record<string, unknown>): string | null {

@@ -27,6 +27,9 @@ import {
   crmPage,
   crmStoreLead,
   drainUnknownUserIds,
+  pickAssignments,
+  pickCreatedAt,
+  pickLastActivity,
   pickLastNote,
   pickOwner,
   pickPhone,
@@ -44,6 +47,19 @@ export const maxDuration = 60;
 const OVERLAP_MS = 2 * 60 * 60 * 1000;
 
 /**
+ * The whole run's time, shared by every step. maxDuration is 60s and Vercel
+ * kills the function at that mark mid-write, so the run stops STARTING work
+ * well before it. Before this existed, 85% of runs in a day were killed, and
+ * because the steps ran in a fixed order the ones at the end - the CRM mirror
+ * and the Meta stage events - were the ones that starved. The order below puts
+ * what matters first and lets the cosmetic steps take whatever is left.
+ */
+const RUN_BUDGET_MS = 54_000;
+/** Stop starting new campaigns' lead reads past this point. Missed ones are
+ * picked up next run - the 2h overlap window re-reads them. */
+const LEADS_PHASE_MS = 26_000;
+
+/**
  * Pulls leads from the TRACKED campaigns only — see lib/tracking.ts for how a
  * campaign becomes tracked (new ones are, automatically).
  *
@@ -55,6 +71,9 @@ export async function GET(req: NextRequest) {
   const full = req.nextUrl.searchParams.get("full") === "1";
   const db = supabaseAdmin();
   const startedAt = new Date().toISOString();
+  const runStart = Date.now();
+  const remaining = () => RUN_BUDGET_MS - (Date.now() - runStart);
+  const deferred: string[] = [];
 
   const { data: run } = await db.from("sync_runs").insert({ started_at: startedAt }).select("id").single();
 
@@ -129,7 +148,21 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    for (const campaign of tracked) {
+    // Insights are read AFTER the CRM mirror and the stage events, with the
+    // time that is left - spend going stale for ten minutes is harmless,
+    // stage feedback not reaching Meta is not.
+    const insightJobs: { campaign: (typeof tracked)[number]; scope: AccountScope; entry: { spend?: number } }[] = [];
+
+    // Rotated each run, so when the budget cuts the list short it is never
+    // the same campaigns that wait.
+    const turn = tracked.length ? Math.floor(runStart / 600_000) % tracked.length : 0;
+    const ordered = [...tracked.slice(turn), ...tracked.slice(0, turn)];
+
+    for (const campaign of ordered) {
+      if (Date.now() - runStart > LEADS_PHASE_MS) {
+        deferred.push(campaign.name);
+        continue;
+      }
       // Which account this campaign belongs to is not a guess. If it is somehow
       // unknown, the campaign is skipped and said so: picking "the first
       // account" would send its events to another account's dataset, and Meta
@@ -206,21 +239,9 @@ export async function GET(req: NextRequest) {
           }
 
         if (rows.length === 0) {
-          const spend = await refreshInsights(db, campaign.id, campaign.created_time, scope).then(
-            (r) => {
-              insightsRows += r.rows;
-              return r.spend;
-            },
-            (err) => {
-              // Spend staying stale is tolerable; not knowing it went stale is
-              // not. Same lesson as the lead reads: name the failure.
-              console.error(
-                `[sync] insights for "${campaign.name}" failed: ${err instanceof Error ? err.message : err}`
-              );
-              return undefined;
-            }
-          );
-          perCampaign.push({ campaign: campaign.name, ads: ads.length, found: 0, inserted: 0, spend });
+          const entry = { campaign: campaign.name, ads: ads.length, found: 0, inserted: 0 } as (typeof perCampaign)[number];
+          perCampaign.push(entry);
+          insightJobs.push({ campaign, scope, entry });
           continue;
         }
 
@@ -234,24 +255,9 @@ export async function GET(req: NextRequest) {
         const n = inserted?.length ?? 0;
         leadsNew += n;
 
-        perCampaign.push({
-          campaign: campaign.name,
-          ads: ads.length,
-          found,
-          inserted: n,
-          spend: await refreshInsights(db, campaign.id, campaign.created_time, scope).then(
-            (r) => {
-              insightsRows += r.rows;
-              return r.spend;
-            },
-            (err) => {
-              console.error(
-                `[sync] insights for "${campaign.name}" failed: ${err instanceof Error ? err.message : err}`
-              );
-              return undefined;
-            }
-          ),
-        });
+        const entry = { campaign: campaign.name, ads: ads.length, found, inserted: n } as (typeof perCampaign)[number];
+        perCampaign.push(entry);
+        insightJobs.push({ campaign, scope, entry });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         // The response carries this too, but nobody reads a cron's response
@@ -268,33 +274,74 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // The wording of each form — what the customer actually read — so the
-    // dashboard can show the Arabic question and answer instead of Meta's keys.
-    const formsStored = await refreshFormSchemas(db, formIdsSeen, formScopes);
+    if (deferred.length > 0) {
+      console.warn(`[sync] run budget: ${deferred.length} campaign(s) wait for the next run: ${deferred.join(" | ")}`);
+    }
 
     // Hand the sales team the leads they cannot otherwise see. Only accounts
     // explicitly opted in (ad_accounts.crm_push) are pushed - the original
     // account's leads already arrive in 8X through its own Facebook
     // integration, and pushing those would create a second copy of every one.
-    const crmPushed = await pushLeadsToCrm(db);
+    const crmPushed = await pushLeadsToCrm(db, 25, Math.min(12_000, remaining() - 30_000));
 
     // What the sales team actually did, read back out of 8X CRM. This is the
     // only thing that fills `status`; nobody types stages into this app.
-    crm = await syncCrmStatuses(db);
+    //
+    // Every run reads the newest pages (new leads, first touches - what the
+    // speed-to-lead clock needs); once an hour, and on the first run with an
+    // empty assignment log, it walks as deep as the budget allows so stage
+    // moves on older leads are mirrored too.
+    const { count: assignmentsLogged } = await db
+      .from("lead_assignments")
+      .select("lead_id", { count: "exact", head: true });
+    const deep =
+      req.nextUrl.searchParams.get("crm") === "deep" ||
+      new Date().getUTCMinutes() < 10 ||
+      (assignmentsLogged ?? 0) === 0;
+    crm = await syncCrmStatuses(db, {
+      deep,
+      budgetMs: Math.min(deep ? 22_000 : 9_000, remaining() - 14_000),
+    });
 
     // Quality scores follow every stage move the mirror just brought in.
     await refreshQualityScores(db);
 
+    // Every stage each lead has reached, for any that never made it to Meta.
+    stageEvents = await sendMissingStageEvents(db);
+
     // Once an hour on the sync that lands in the first ten-minute slot: renew
     // any Facebook Login token inside its warning window. This is the only
-    // schedule the deployment guarantees, so the renewal lives on it.
-    if (new Date().getUTCMinutes() < 10) {
+    // schedule the deployment guarantees, so the renewal lives on it - ahead
+    // of the insights, which would otherwise eat its time on exactly that run.
+    if (new Date().getUTCMinutes() < 10 && remaining() > 3_000) {
       const t = await renewExpiringTokens();
       if (t.checked > 0) console.log(`[sync] tokens: checked=${t.checked} renewed=${t.refreshed} declined=${t.failed}`);
     }
 
-    // Every stage each lead has reached, for any that never made it to Meta.
-    stageEvents = await sendMissingStageEvents(db);
+    // Spend and delivery, with whatever time is left.
+    let insightsSkipped = 0;
+    for (const job of insightJobs) {
+      if (remaining() < 9_000) { insightsSkipped++; continue; }
+      job.entry.spend = await refreshInsights(db, job.campaign.id, job.campaign.created_time, job.scope).then(
+        (r) => {
+          insightsRows += r.rows;
+          return r.spend;
+        },
+        (err) => {
+          // Spend staying stale is tolerable; not knowing it went stale is
+          // not. Same lesson as the lead reads: name the failure.
+          console.error(
+            `[sync] insights for "${job.campaign.name}" failed: ${err instanceof Error ? err.message : err}`
+          );
+          return undefined;
+        }
+      );
+    }
+    if (insightsSkipped > 0) console.warn(`[sync] run budget: insights for ${insightsSkipped} campaign(s) wait for the next run`);
+
+    // The wording of each form — what the customer actually read — so the
+    // dashboard can show the Arabic question and answer instead of Meta's keys.
+    const formsStored = remaining() > 7_000 ? await refreshFormSchemas(db, formIdsSeen, formScopes) : 0;
 
     if (run?.id) {
       await db
@@ -317,7 +364,8 @@ export async function GET(req: NextRequest) {
         `leads=${leadsFound} new=${leadsNew} stageEvents=${stageEvents} ` +
         `insights=${insightsRows} forms=${formsStored} ` +
         `crmPush=${crmPushed.pushed}/${crmPushed.pushed + crmPushed.failed}${crmPushed.left ? ` (+${crmPushed.left} queued)` : ""} ` +
-        `crm=${crm.skipped ?? `${crm.matched}/${crm.scanned} matched, ${crm.changed} moved, ${crm.owners} owners, ${crm.notes} notes`}`
+        `crm=${crm.skipped ?? `${crm.matched}/${crm.scanned} matched, ${crm.changed} moved, ${crm.owners} owners, ${crm.notes} notes`}` +
+        ` took=${Date.now() - runStart}ms`
     );
 
     return NextResponse.json({
@@ -334,6 +382,8 @@ export async function GET(req: NextRequest) {
       formsStored,
       crmPushed,
       crm,
+      deferred,
+      tookMs: Date.now() - runStart,
       perCampaign,
     });
   } catch (err) {
@@ -462,9 +512,11 @@ function fitDescription(lines: string[]): string {
  */
 async function pushLeadsToCrm(
   db: ReturnType<typeof supabaseAdmin>,
-  limit = 25
+  limit = 25,
+  budgetMs = 15_000
 ): Promise<{ pushed: number; failed: number; left: number; skipped?: string }> {
   if (!CRM_CONFIGURED) return { pushed: 0, failed: 0, left: 0, skipped: "CRM_API_KEY not set" };
+  if (budgetMs < 2_000) return { pushed: 0, failed: 0, left: 0, skipped: "no time left this run" };
 
   const { data: optedIn } = await db
     .from("ad_accounts")
@@ -538,7 +590,7 @@ async function pushLeadsToCrm(
     // the function before the CRM mirror ever runs, which is how one slow
     // batch silenced stage feedback entirely. Whatever is left stays queued
     // for the next run ten minutes later.
-    if (Date.now() - pushStarted > 15_000) break;
+    if (Date.now() - pushStarted > budgetMs) break;
 
     // 8X caps this column at 191 characters and answers a longer one with a
     // hard 422 - which is what refused every single push until the log said
@@ -844,8 +896,10 @@ const skippedResult = (why: string): CrmSyncResult =>
 
 /** How many CRM rows to pull at a time. 250 is the most the server honours. */
 const CRM_PAGE = 250;
-/** Leaves room for the rest of the run inside the 60s function limit. */
-const CRM_BUDGET_MS = 25_000;
+/** Pages read on an ordinary run: the newest leads, where the clock is running. */
+const CRM_FAST_PAGES = 2;
+/** Pages fetched side by side on a deep run. */
+const CRM_PARALLEL = 3;
 /** Note inserts per run — the mirror catches up over runs, never in one gulp. */
 const CRM_MAX_NOTES = 200;
 
@@ -871,7 +925,10 @@ const CRM_MAX_NOTES = 200;
  * lead filed under the wrong stage leaves here as optimisation signal to Meta,
  * and no screen anywhere would show it.
  */
-async function syncCrmStatuses(db: ReturnType<typeof supabaseAdmin>): Promise<CrmSyncResult> {
+async function syncCrmStatuses(
+  db: ReturnType<typeof supabaseAdmin>,
+  opts: { deep: boolean; budgetMs: number }
+): Promise<CrmSyncResult> {
   if (!CRM_CONFIGURED) {
     console.log("[sync] crm: skipped, CRM_API_KEY not set");
     return skippedResult("CRM_API_KEY not set");
@@ -886,8 +943,17 @@ async function syncCrmStatuses(db: ReturnType<typeof supabaseAdmin>): Promise<Cr
     );
   }
 
-  const { data: ours, error } = await db.from("leads").select("lead_id,status,owner,phone");
+  if (opts.budgetMs < 3_000) {
+    console.warn("[sync] crm: skipped, no time left this run");
+    return skippedResult("no time left this run");
+  }
+  const CRM_BUDGET_MS = opts.budgetMs;
+
+  const { data: ours, error } = await db.from("leads").select("lead_id,status,owner,phone,crm_created_at");
   if (error) return skippedResult(error.message);
+  const noCrmCreated = new Set(
+    (ours ?? []).filter((l) => !(l as { crm_created_at?: string | null }).crm_created_at).map((l) => String(l.lead_id))
+  );
 
   const mine = new Map(
     (ours ?? []).map((l) => [String(l.lead_id), { status: l.status as Status, owner: (l.owner as string | null) ?? null }])
@@ -925,6 +991,14 @@ async function syncCrmStatuses(db: ReturnType<typeof supabaseAdmin>): Promise<Cr
   const patches = new Map<string, Record<string, unknown>>();
   const noteCandidates = new Map<string, { lead_id: string; body: string; author: string; at: string | null }>();
   const sample: { lead_id: string; owner: string | null; note: string | null }[] = [];
+  // The raw material for speed-to-lead: who holds each lead and since when,
+  // every activity with its real author and time, and when the lead landed.
+  const assignmentRows = new Map<string, { lead_id: string; user_id: number; user_name: string; assigned_at: string }>();
+  const activityRows = new Map<string, {
+    lead_id: string; kind: "activity" | "stage"; at: string; actor: string;
+    actor_id: number | null; has_note: boolean; to_status: string | null;
+  }>();
+  const createdAt: { lead_id: string; at: string }[] = [];
   let scanned = 0;
   let matched = 0;
   let matchedByPhone = 0;
@@ -935,14 +1009,7 @@ async function syncCrmStatuses(db: ReturnType<typeof supabaseAdmin>): Promise<Cr
   // the next run's log instead of staying invisible.
   let manualRowKeys: string | null = null;
 
-  try {
-    for (let start = 0; ; start += CRM_PAGE) {
-      const page = await crmPage(start, CRM_PAGE);
-      total = page.total;
-      if (page.rows.length === 0) break;
-      scanned += page.rows.length;
-
-      for (const row of page.rows) {
+  const handleRow = (row: Record<string, unknown>) => {
         let leadId = row.leadgen_id ? String(row.leadgen_id) : null;
         let current = leadId ? mine.get(leadId) : undefined;
 
@@ -959,10 +1026,18 @@ async function syncCrmStatuses(db: ReturnType<typeof supabaseAdmin>): Promise<Cr
           }
         }
 
-        if (!leadId || current === undefined) continue;  // not a lead this app tracks
+        if (!leadId || current === undefined) return;  // not a lead this app tracks
         matched++;
 
         const patch: Record<string, unknown> = {};
+
+        const activity = pickLastActivity(row);
+        if (activity) {
+          activityRows.set(`${leadId}|activity|${activity.at}|${activity.actor}`, {
+            lead_id: leadId, kind: "activity", at: activity.at, actor: activity.actor,
+            actor_id: activity.actorId, has_note: activity.hasNote, to_status: null,
+          });
+        }
 
         const next = statusFromCrmStatusId(row.status_id);
         if (!next && row.status_id != null) unmapped.add(String(row.status_id));
@@ -971,10 +1046,37 @@ async function syncCrmStatuses(db: ReturnType<typeof supabaseAdmin>): Promise<Cr
           moves.push({ lead_id: leadId, from: current.status, to: next, at });
           patch.status = next;
           patch.status_at = at ?? new Date().toISOString();
+          // Who moved it: 8X names nobody on a stage change, but moving a
+          // stage is done from an activity, so an activity logged within a few
+          // minutes of the move is the same hand. Otherwise left unnamed, and
+          // the speed report credits whoever held the lead at the time.
+          const moveAt = Date.parse(String(patch.status_at));
+          const sameHand =
+            activity && Number.isFinite(moveAt) && Math.abs(Date.parse(activity.at) - moveAt) <= 15 * 60_000;
+          const actor = sameHand ? activity!.actor : "";
+          const stageAt = new Date(Number.isFinite(moveAt) ? moveAt : Date.now()).toISOString();
+          activityRows.set(`${leadId}|stage|${stageAt}|${actor}`, {
+            lead_id: leadId, kind: "stage", at: stageAt, actor,
+            actor_id: sameHand ? activity!.actorId : null, has_note: false, to_status: next,
+          });
         }
 
         const owner = pickOwner(row);
         if (owner && owner !== current.owner) patch.owner = owner;
+
+        for (const a of pickAssignments(row)) {
+          assignmentRows.set(`${leadId}|${a.userId}|${a.at}`, {
+            lead_id: leadId, user_id: a.userId, user_name: a.name, assigned_at: a.at,
+          });
+        }
+
+        if (noCrmCreated.has(leadId)) {
+          const c = pickCreatedAt(row);
+          if (c) {
+            createdAt.push({ lead_id: leadId, at: c });
+            noCrmCreated.delete(leadId);
+          }
+        }
 
         const note = pickLastNote(row);
         if (note && noteCandidates.size < CRM_MAX_NOTES) {
@@ -988,13 +1090,66 @@ async function syncCrmStatuses(db: ReturnType<typeof supabaseAdmin>): Promise<Cr
 
         if (Object.keys(patch).length > 0) patches.set(leadId, patch);
         if (sample.length < 3) sample.push({ lead_id: leadId, owner, note: note ? note.body.slice(0, 60) : null });
-      }
+  };
 
-      if (scanned >= total) break;
+  // v4 lists newest first, so the first pages are where new leads and first
+  // touches are. An ordinary run reads just those; a deep run keeps going,
+  // a few pages at a time, until it has read everything or the budget is out.
+  let pagesRead = 0;
+  let firstPageSpan: string | null = null;
+  try {
+    for (let start = 0; ; ) {
+      const want = opts.deep ? CRM_PARALLEL : Math.min(CRM_PARALLEL, CRM_FAST_PAGES - pagesRead);
+      if (want <= 0) break;
+      const starts = Array.from({ length: want }, (_, i) => start + i * CRM_PAGE).filter(
+        (s) => total === 0 || s < total
+      );
+      if (starts.length === 0) break;
+      const pages = await Promise.all(starts.map((s) => crmPage(s, CRM_PAGE)));
+      let empty = false;
+      for (const page of pages) {
+        total = page.total;
+        if (page.rows.length === 0) { empty = true; continue; }
+        if (firstPageSpan === null) {
+          const f = page.rows[0], l = page.rows[page.rows.length - 1];
+          firstPageSpan = `created ${String(f.created_at ?? "?")} .. ${String(l.created_at ?? "?")}`;
+        }
+        scanned += page.rows.length;
+        for (const row of page.rows) handleRow(row);
+      }
+      pagesRead += starts.length;
+      start += starts.length * CRM_PAGE;
+      if (empty || scanned >= total) break;
       if (Date.now() - startedAt > CRM_BUDGET_MS) break;
     }
   } catch (err) {
     console.error(`[sync] crm: page failed — ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  // Speed-to-lead history. Append-only and keyed on the event itself, so
+  // re-reading the same lead every run adds nothing and costs one round trip.
+  const chunk = <T,>(xs: T[], n = 500) => Array.from({ length: Math.ceil(xs.length / n) }, (_, i) => xs.slice(i * n, i * n + n));
+  let assignmentsNew = 0;
+  let activitiesNew = 0;
+  for (const part of chunk([...assignmentRows.values()])) {
+    const { data, error: aErr } = await db
+      .from("lead_assignments")
+      .upsert(part, { onConflict: "lead_id,user_id,assigned_at", ignoreDuplicates: true })
+      .select("lead_id");
+    if (aErr) console.error(`[sync] crm: assignment log failed — ${aErr.message}`);
+    else assignmentsNew += data?.length ?? 0;
+  }
+  for (const part of chunk([...activityRows.values()])) {
+    const { data, error: xErr } = await db
+      .from("lead_activities")
+      .upsert(part, { onConflict: "lead_id,kind,at,actor", ignoreDuplicates: true })
+      .select("lead_id");
+    if (xErr) console.error(`[sync] crm: activity log failed — ${xErr.message}`);
+    else activitiesNew += data?.length ?? 0;
+  }
+  if (createdAt.length > 0) {
+    const { error: cErr } = await db.rpc("mirror_crm_created_at", { rows: createdAt });
+    if (cErr) console.error(`[sync] crm: arrival times failed — ${cErr.message}`);
   }
 
   let owners = 0;
@@ -1045,10 +1200,12 @@ async function syncCrmStatuses(db: ReturnType<typeof supabaseAdmin>): Promise<Cr
     console.warn(`[sync] crm: unknown user id(s): ${unknownUsers.join(", ")} — likely suspended agents; add to CRM_USER_TO_NAME`);
   }
   console.log(
-    `[sync] crm: scanned=${scanned}/${total} matched=${matched}` +
+    `[sync] crm: ${opts.deep ? "deep" : "fast"} pages=${pagesRead} scanned=${scanned}/${total} matched=${matched}` +
       (matchedByPhone ? ` (${matchedByPhone} by phone)` : "") +
       ` moved=${moves.length} owners=${owners} notes=${notesAdded}` +
-      (unmapped.size ? ` unmapped=${[...unmapped].join(",")}` : "")
+      ` assignments+${assignmentsNew} activities+${activitiesNew} arrivals+${createdAt.length}` +
+      (unmapped.size ? ` unmapped=${[...unmapped].join(",")}` : "") +
+      (firstPageSpan ? ` first-page ${firstPageSpan}` : "")
   );
 
   const result: CrmSyncResult = {

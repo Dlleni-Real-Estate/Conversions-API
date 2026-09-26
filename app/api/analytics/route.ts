@@ -109,6 +109,13 @@ export async function GET(req: NextRequest) {
   // creative name from the original set. So the id is stamped on per ad.
   const adsetOfAdQuery = db.from("ad_insights").select("ad_id,adset_id,adset_name");
 
+  // The pickers ALSO list every ad set Meta reports delivery for. Built from
+  // leads alone, an ad set that has spent money and brought nothing was
+  // impossible to select - exactly the one you most need to look at. (Delta
+  // spent for days before its first lead and never appeared in the list.)
+  let deliveryOptionsQuery = db.from("ad_insights").select("campaign_id,campaign_name,adset_id,adset_name").limit(5000);
+  if (account) deliveryOptionsQuery = deliveryOptionsQuery.eq("ad_account_id", account);
+
   const [
     { data: leadsRaw, error: leadErr },
     { data: adsRaw, error: adErr },
@@ -117,6 +124,7 @@ export async function GET(req: NextRequest) {
     adsetRes,
     { data: optionRows },
     { data: adsetOfAd },
+    { data: deliveryOptionRows },
   ] = await Promise.all([
     leadQuery,
     adQuery,
@@ -125,6 +133,7 @@ export async function GET(req: NextRequest) {
     adsetInsightsQuery ?? Promise.resolve({ data: null }),
     optionsQuery,
     adsetOfAdQuery,
+    deliveryOptionsQuery,
   ]);
 
   const dict = buildDictionary((formRows ?? []) as unknown as FormSchema[]);
@@ -404,22 +413,26 @@ export async function GET(req: NextRequest) {
     adset_id: string | null;
     adset_name: string | null;
   };
-  const opts = (optionRows ?? []) as OptionRow[];
+  // Leads first, so a name taken from a lead wins over the delivery row's.
+  const opts = [...((optionRows ?? []) as OptionRow[]), ...((deliveryOptionRows ?? []) as OptionRow[])];
 
-  const campaigns = [
-    ...new Map(opts.filter((o) => o.campaign_id).map((o) => [o.campaign_id as string, o.campaign_name])).entries(),
-  ].map(([id, name]) => ({ id, name: name ?? id }));
+  const campaignNames = new Map<string, string | null>();
+  for (const o of opts) {
+    if (o.campaign_id && !campaignNames.get(o.campaign_id)) campaignNames.set(o.campaign_id, o.campaign_name);
+  }
+  const campaigns = [...campaignNames.entries()].map(([id, name]) => ({ id, name: name ?? id }));
 
-  // Ad sets present in whatever is in scope, so the leads picker only ever
-  // offers a set that has leads to show. Keyed by id: Ads Manager lets two
-  // ad sets share a name, and names get edited under you.
-  const adsets = [
-    ...new Map(
-      opts
-        .filter((o) => o.adset_id)
-        .map((o) => [o.adset_id as string, { name: o.adset_name, campaign_id: o.campaign_id }] as const)
-    ).entries(),
-  ].map(([id, v]) => ({ id, name: v.name ?? id, campaign_id: v.campaign_id }));
+  // Every ad set with leads OR with delivery. Keyed by id: Ads Manager lets
+  // two ad sets share a name, and names get edited under you.
+  const adsetMap = new Map<string, { name: string | null; campaign_id: string | null }>();
+  for (const o of opts) {
+    if (!o.adset_id) continue;
+    const cur = adsetMap.get(o.adset_id);
+    if (!cur) adsetMap.set(o.adset_id, { name: o.adset_name, campaign_id: o.campaign_id });
+    else if (!cur.name || !cur.campaign_id)
+      adsetMap.set(o.adset_id, { name: cur.name ?? o.adset_name, campaign_id: cur.campaign_id ?? o.campaign_id });
+  }
+  const adsets = [...adsetMap.entries()].map(([id, v]) => ({ id, name: v.name ?? id, campaign_id: v.campaign_id }));
 
   // ── Campaigns side by side ───────────────────────────────────────────────
   // Only when the whole account is in scope — inside one campaign the board

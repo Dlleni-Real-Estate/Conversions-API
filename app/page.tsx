@@ -8,6 +8,7 @@ import CampaignSettings from "@/components/CampaignSettings";
 import HealthPanel from "@/components/HealthPanel";
 import AdAccounts from "@/components/AdAccounts";
 import AuditPanel from "@/components/AuditPanel";
+import TeamView, { type TeamData } from "@/components/TeamView";
 import { LangProvider, LangSwitch, useLang } from "@/components/LangProvider";
 import type { FormDictionary } from "@/lib/labels";
 import type { Analytics, Lead } from "@/components/types";
@@ -18,6 +19,7 @@ const ACC_KEY = "dlleni_account";
 const TABS = [
   { id: "pipeline", tk: "tabPipeline" },
   { id: "analytics", tk: "tabAnalytics" },
+  { id: "team", tk: "tabTeam" },
   { id: "settings", tk: "tabSettings" },
 ] as const;
 type Tab = (typeof TABS)[number]["id"];
@@ -53,6 +55,30 @@ function Dashboard() {
   // totals stop meaning anything; the switcher swaps worlds instead.
   const [account, setAccount] = useState("");
   const [lastLoaded, setLastLoaded] = useState<Date | null>(null);
+
+  // The team screen is its own request, made only while it is open: it reads
+  // two history tables per lead, and the pipeline has no use for any of it.
+  const [team, setTeam] = useState<TeamData | null>(null);
+  const [teamDays, setTeamDays] = useState(30);
+  const [teamLoading, setTeamLoading] = useState(false);
+  const loadTeam = useCallback(async () => {
+    setTeamLoading(true);
+    try {
+      const qs = new URLSearchParams({ campaign: scope, account, adset, days: String(teamDays) });
+      const res = await fetch(`/api/agents?${qs}`, { headers: { "x-app-password": pw } });
+      const json = await res.json();
+      if (json.ok) setTeam(json);
+    } catch {
+      setErr(t.connectionError);
+    } finally {
+      setTeamLoading(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pw, scope, account, adset, teamDays]);
+
+  useEffect(() => {
+    if (authed && tab === "team") loadTeam();
+  }, [authed, tab, loadTeam]);
 
   useEffect(() => {
     const saved = typeof window !== "undefined" ? window.sessionStorage.getItem(PW_KEY) : null;
@@ -299,7 +325,10 @@ function Dashboard() {
                 </select>
               )}
               <button
-                onClick={() => load()}
+                onClick={() => {
+                  load();
+                  if (tab === "team") loadTeam();
+                }}
                 disabled={loading}
                 className="tap rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium shadow-card hover:bg-slate-50 disabled:opacity-40"
                 title={t.refreshHint}
@@ -367,6 +396,10 @@ function Dashboard() {
               {loading ? t.loading : t.noData}
             </div>
           ))}
+
+        {tab === "team" && (
+          <TeamView data={team} loading={teamLoading} days={teamDays} onDays={setTeamDays} />
+        )}
 
         {/* Kept mounted, only hidden. Unmounting on every tab switch threw
             away all three components' state, so coming back meant a full
