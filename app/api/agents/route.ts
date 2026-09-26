@@ -39,7 +39,7 @@ export async function GET(req: NextRequest) {
   let q = db
     .from("leads")
     .select(
-      "lead_id,full_name,campaign_id,campaign_name,adset_name,status,quality_score,owner,submitted_at,crm_created_at,crm_pushed_at"
+      "lead_id,full_name,campaign_id,campaign_name,adset_name,status,quality_score,owner,submitted_at,crm_created_at,crm_pushed_at,crm_returning_since"
     )
     .gte("submitted_at", since)
     .order("submitted_at", { ascending: false })

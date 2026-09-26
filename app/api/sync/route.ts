@@ -25,6 +25,7 @@ import { APP_SENDS_EVENTS, SENDER } from "@/lib/sender";
 import {
   CRM_CONFIGURED,
   crmPage,
+  crmSearchByPhone,
   crmStoreLead,
   drainUnknownUserIds,
   pickAssignments,
@@ -134,13 +135,20 @@ export async function GET(req: NextRequest) {
       req.nextUrl.searchParams.get("crm") === "deep" ||
       new Date().getUTCMinutes() < 10 ||
       (assignmentsLogged ?? 0) === 0;
-    const crmBudget = deep ? 16_000 : 7_000;
-    // The page reads inside are bounded by the budget; the database writes
-    // after them are not, so the whole step gets a hard ceiling as well.
-    crm = await withDeadline(syncCrmStatuses(db, { deep, budgetMs: crmBudget }), crmBudget + 8_000, () => {
-      console.error(`[sync] crm: gave up after ${(crmBudget + 8_000) / 1000}s - 8X or the database is stuck; the rest of the run carries on`);
-      return skippedResult("timed out");
-    });
+    const crmBudget = deep ? 20_000 : 16_000;
+    const lookupBudget = 6_000;
+    const crmCeiling = crmBudget + lookupBudget + 6_000;
+    // The page reads and look-ups inside are bounded by their budgets; the
+    // database writes after them are not, so the whole step gets a hard
+    // ceiling as well.
+    crm = await withDeadline(
+      syncCrmStatuses(db, { deep, budgetMs: crmBudget, lookupMs: lookupBudget }),
+      crmCeiling,
+      () => {
+        console.error(`[sync] crm: gave up after ${crmCeiling / 1000}s - 8X or the database is stuck; the rest of the run carries on`);
+        return skippedResult("timed out");
+      }
+    );
     done("crm");
 
     // 2. Quality scores follow every stage move the mirror just brought in,
@@ -950,10 +958,17 @@ const skippedResult = (why: string): CrmSyncResult =>
 
 /** How many CRM rows to pull at a time. 250 is the most the server honours. */
 const CRM_PAGE = 250;
-/** Pages read on an ordinary run: the newest leads, where the clock is running. */
-const CRM_FAST_PAGES = 2;
+/**
+ * An ordinary run reads ONE page of the newest rows - about two weeks of
+ * leads, which covers every lead Meta will still take a stage event for
+ * (seven days) and every clock still running. 8X answers a 250-row page in
+ * 10-20s on a bad afternoon, so the page is kept small.
+ */
+const CRM_FAST_LENGTH = 120;
 /** Pages fetched side by side on a deep run. */
-const CRM_PARALLEL = 3;
+const CRM_PARALLEL = 2;
+/** Phone look-ups per run for leads the pages did not find (returning people). */
+const CRM_LOOKUPS = 4;
 /** Note inserts per run — the mirror catches up over runs, never in one gulp. */
 const CRM_MAX_NOTES = 200;
 
@@ -981,7 +996,7 @@ const CRM_MAX_NOTES = 200;
  */
 async function syncCrmStatuses(
   db: ReturnType<typeof supabaseAdmin>,
-  opts: { deep: boolean; budgetMs: number }
+  opts: { deep: boolean; budgetMs: number; lookupMs: number }
 ): Promise<CrmSyncResult> {
   if (!CRM_CONFIGURED) {
     console.log("[sync] crm: skipped, CRM_API_KEY not set");
@@ -1003,8 +1018,17 @@ async function syncCrmStatuses(
   }
   const CRM_BUDGET_MS = opts.budgetMs;
 
-  const { data: ours, error } = await db.from("leads").select("lead_id,status,owner,phone,crm_created_at");
+  const { data: ours, error } = await db
+    .from("leads")
+    .select("lead_id,status,owner,phone,crm_created_at,submitted_at,crm_returning_since,crm_lookup_at,crm_pushed_at");
   if (error) return skippedResult(error.message);
+  type Ours = {
+    lead_id: string; phone: string | null; owner: string | null; submitted_at: string;
+    crm_created_at: string | null; crm_returning_since: string | null; crm_lookup_at: string | null;
+    crm_pushed_at: string | null;
+  };
+  const leadInfo = new Map(((ours ?? []) as unknown as Ours[]).map((l) => [String(l.lead_id), l]));
+  const seenThisRun = new Set<string>();
   const noCrmCreated = new Set(
     (ours ?? []).filter((l) => !(l as { crm_created_at?: string | null }).crm_created_at).map((l) => String(l.lead_id))
   );
@@ -1082,10 +1106,31 @@ async function syncCrmStatuses(
 
         if (!leadId || current === undefined) return;  // not a lead this app tracks
         matched++;
+        seenThisRun.add(leadId);
 
         const patch: Record<string, unknown> = {};
+        const info = leadInfo.get(leadId);
+        const submitted = info ? Date.parse(info.submitted_at) : NaN;
 
-        const activity = pickLastActivity(row);
+        // A RETURNING person: the 8X record predates this form by more than a
+        // day and is not this submission (no matching leadgen_id). 8X's
+        // duplicate check folded the new form into the old record - no new
+        // lead, and for cold-call data no re-assignment and no alert. The
+        // record's stage and history belong to the old conversation, so none
+        // of it is imported as if it answered this one.
+        const rowCreatedAt = pickCreatedAt(row);
+        const returning =
+          !!rowCreatedAt && Number.isFinite(submitted) &&
+          Date.parse(rowCreatedAt) < submitted - 24 * 3600_000 &&
+          String(row.leadgen_id ?? "") !== leadId;
+        if (returning && !info?.crm_returning_since) patch.crm_returning_since = rowCreatedAt;
+
+        // Only what happened on or after this lead's arrival is about this lead.
+        const sinceArrival = (at: string | null | undefined) =>
+          !Number.isFinite(submitted) || (!!at && Date.parse(at) >= submitted - 10 * 60_000);
+
+        const rawActivity = pickLastActivity(row);
+        const activity = rawActivity && sinceArrival(rawActivity.at) ? rawActivity : null;
         if (activity) {
           activityRows.set(`${leadId}|activity|${activity.at}|${activity.actor}`, {
             lead_id: leadId, kind: "activity", at: activity.at, actor: activity.actor,
@@ -1095,7 +1140,10 @@ async function syncCrmStatuses(
 
         const next = statusFromCrmStatusId(row.status_id);
         if (!next && row.status_id != null) unmapped.add(String(row.status_id));
-        if (next && next !== current.status) {
+        // On a returning record the stage is the old conversation's until
+        // someone acts on it after this form arrived.
+        const stageIsOurs = !returning || !!activity;
+        if (next && next !== current.status && stageIsOurs) {
           const at = typeof row.updated_at === "string" ? row.updated_at : null;
           moves.push({ lead_id: leadId, from: current.status, to: next, at });
           patch.status = next;
@@ -1124,7 +1172,7 @@ async function syncCrmStatuses(
           });
         }
 
-        if (noCrmCreated.has(leadId)) {
+        if (noCrmCreated.has(leadId) && !returning) {
           const c = pickCreatedAt(row);
           if (c) {
             createdAt.push({ lead_id: leadId, at: c });
@@ -1132,7 +1180,8 @@ async function syncCrmStatuses(
           }
         }
 
-        const note = pickLastNote(row);
+        const rawNote = pickLastNote(row);
+        const note = rawNote && (!returning || sinceArrival(rawNote.at)) ? rawNote : null;
         if (note && noteCandidates.size < CRM_MAX_NOTES) {
           noteCandidates.set(`${leadId}\u0000${note.body}`, {
             lead_id: leadId,
@@ -1152,17 +1201,18 @@ async function syncCrmStatuses(
   let pagesRead = 0;
   let firstPageSpan: string | null = null;
   try {
+    const pageLen = opts.deep ? CRM_PAGE : CRM_FAST_LENGTH;
     for (let start = 0; ; ) {
-      const want = opts.deep ? CRM_PARALLEL : Math.min(CRM_PARALLEL, CRM_FAST_PAGES - pagesRead);
+      const want = opts.deep ? CRM_PARALLEL : 1 - pagesRead;
       if (want <= 0) break;
-      const starts = Array.from({ length: want }, (_, i) => start + i * CRM_PAGE).filter(
+      const starts = Array.from({ length: want }, (_, i) => start + i * pageLen).filter(
         (s) => total === 0 || s < total
       );
       if (starts.length === 0) break;
       // Each read gets only what is left of the budget, so a slow 8X costs
       // this step its budget and nothing more.
-      const left = Math.min(12_000, Math.max(2_000, CRM_BUDGET_MS - (Date.now() - startedAt)));
-      const pages = await Promise.all(starts.map((s) => crmPage(s, CRM_PAGE, left)));
+      const left = Math.max(2_000, CRM_BUDGET_MS - (Date.now() - startedAt));
+      const pages = await Promise.all(starts.map((s) => crmPage(s, pageLen, left)));
       let empty = false;
       for (const page of pages) {
         total = page.total;
@@ -1175,12 +1225,57 @@ async function syncCrmStatuses(
         for (const row of page.rows) handleRow(row);
       }
       pagesRead += starts.length;
-      start += starts.length * CRM_PAGE;
+      start += starts.length * pageLen;
       if (empty || scanned >= total) break;
       if (Date.now() - startedAt > CRM_BUDGET_MS) break;
     }
   } catch (err) {
     console.error(`[sync] crm: page failed — ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  // Leads the pages did not find: look each one up by phone. This is where a
+  // returning person turns up - 8X put their new form into an old record deep
+  // in the list. Newest first, a few per run, and a lead that is still not
+  // found is asked about again hourly while fresh, daily after that.
+  let lookedUp = 0;
+  let lookupHits = 0;
+  if (opts.lookupMs > 1_500) {
+    const nowMs = Date.now();
+    const due = ((ours ?? []) as unknown as Ours[])
+      .filter((l) => {
+        if (seenThisRun.has(String(l.lead_id)) || !l.phone) return false;
+        if (l.owner && l.crm_created_at) return false;             // found before
+        if (l.owner && l.crm_returning_since) return false;         // known returning
+        const age = nowMs - Date.parse(l.submitted_at);
+        if (!(age < 30 * 24 * 3600_000)) return false;
+        const last = l.crm_lookup_at ? Date.parse(l.crm_lookup_at) : 0;
+        return nowMs - last > (age < 3 * 24 * 3600_000 ? 3600_000 : 24 * 3600_000);
+      })
+      .sort((a, b) => Date.parse(b.submitted_at) - Date.parse(a.submitted_at))
+      .slice(0, CRM_LOOKUPS);
+
+    const lookStart = Date.now();
+    const asked: string[] = [];
+    for (const l of due) {
+      const left = opts.lookupMs - (Date.now() - lookStart);
+      if (left < 1_500) break;
+      try {
+        const rows = await crmSearchByPhone(l.phone as string, Math.min(8_000, left));
+        asked.push(String(l.lead_id));
+        lookedUp++;
+        // Oldest first, so the most recent record is the one that sticks.
+        rows.sort((a, b) => Date.parse(String(a.created_at ?? 0)) - Date.parse(String(b.created_at ?? 0)));
+        const before = seenThisRun.size;
+        for (const row of rows) handleRow(row);
+        if (seenThisRun.size > before) lookupHits++;
+      } catch (err) {
+        console.warn(`[sync] crm: phone look-up failed - ${err instanceof Error ? err.message : String(err)}`);
+        break;
+      }
+    }
+    if (asked.length > 0) {
+      await db.from("leads").update({ crm_lookup_at: new Date().toISOString() }).in("lead_id", asked);
+    }
   }
 
   // Speed-to-lead history. Append-only and keyed on the event itself, so
@@ -1261,6 +1356,7 @@ async function syncCrmStatuses(
       (matchedByPhone ? ` (${matchedByPhone} by phone)` : "") +
       ` moved=${moves.length} owners=${owners} notes=${notesAdded}` +
       ` assignments+${assignmentsNew} activities+${activitiesNew} arrivals+${createdAt.length}` +
+      ` lookups=${lookupHits}/${lookedUp}` +
       (unmapped.size ? ` unmapped=${[...unmapped].join(",")}` : "") +
       (firstPageSpan ? ` first-page ${firstPageSpan}` : "")
   );

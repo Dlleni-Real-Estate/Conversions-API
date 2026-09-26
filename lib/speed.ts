@@ -124,6 +124,12 @@ export type SpeedLeadInput = {
   submitted_at: string;
   crm_created_at: string | null;
   crm_pushed_at: string | null;
+  /**
+   * Set when the person was ALREADY in 8X before this form: 8X folds the new
+   * submission into the old record (duplicate check on), so no new lead is
+   * created and, for cold-call data, nobody is re-assigned or alerted.
+   */
+  crm_returning_since?: string | null;
 };
 
 export type AssignmentRow = { lead_id: string; user_name: string | null; user_id: number; assigned_at: string };
@@ -181,6 +187,8 @@ export type LeadSpeed = {
   approx: boolean;
   /** The first action's time is when the sync noticed it, not when it happened. */
   first_approx: boolean;
+  /** Already in 8X since this date; the new form reached nobody on its own. */
+  returning_since: string | null;
 };
 
 const ms = (iso: string | null | undefined) => (iso ? Date.parse(iso) : NaN);
@@ -194,15 +202,21 @@ export function deriveLead(
   /** When the assignment log started (ms). Leads older than this are estimates. */
   trackingSince: number | null = null
 ): LeadSpeed {
+  const returning = lead.crm_returning_since ?? null;
+  // A returning person's 8X record is months old; the clock starts at the new form.
   const arrived =
-    [ms(lead.crm_created_at), ms(lead.crm_pushed_at), ms(lead.submitted_at)].find((t) => Number.isFinite(t)) ?? now;
+    [returning ? NaN : ms(lead.crm_created_at), ms(lead.crm_pushed_at), ms(lead.submitted_at)].find((t) =>
+      Number.isFinite(t)
+    ) ?? now;
 
   // Earliest time each person was given the lead.
   const firstBy = new Map<string, number>();
   for (const a of assignmentsIn) {
     const name = canonicalName(a.user_name || `Agent #${a.user_id}`);
-    const t = ms(a.assigned_at);
+    let t = ms(a.assigned_at);
     if (!Number.isFinite(t)) continue;
+    // Held before this lead arrived (a returning person): held from arrival.
+    if (t < arrived) t = arrived;
     const cur = firstBy.get(name);
     if (cur === undefined || t < cur) firstBy.set(name, t);
   }
@@ -228,6 +242,11 @@ export function deriveLead(
 
   const firstAgent = agents.find((a) => Number.isFinite(a.at)) ?? null;
   const routedAt = firstAgent ? firstAgent.at : null;
+  // A hand-off the log watched happen is exact, even for a lead that arrived
+  // before the log started: only hand-offs from before it can be rewritten ones.
+  if (approx && trackingSince !== null && routedAt !== null && routedAt >= trackingSince - 10 * 60_000) {
+    approx = false;
+  }
   const leaderBefore = routedAt !== null ? leaders.find((l) => !Number.isFinite(l.at) || l.at <= routedAt + 60_000) : leaders[0];
   const autoRouted =
     routedAt !== null && !leaderBefore && (routedAt - arrived) / 60000 <= AUTO_ROUTE_GRACE_MIN;
@@ -312,6 +331,7 @@ export function deriveLead(
     handler_actions: handlerActs.length,
     approx,
     first_approx: !!first?.approx,
+    returning_since: returning,
   };
 }
 
@@ -320,6 +340,8 @@ export function deriveLead(
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type TimeStats = {
+  /** No exactly-timed lead yet, so these come from estimated ones. */
+  est?: boolean;
   n: number;
   median: number | null;
   /** Share answered within 15 working minutes, 1 working hour, 1 working day. */
@@ -363,9 +385,23 @@ export type TeamSummary = {
   routing: TimeStats;
   pickup: TimeStats;
   approx_leads: number;
+  /** Came back through a new form while already in 8X. */
+  returning: number;
+  returning_untouched: number;
 };
 
 const pct = (n: number, d: number) => (d > 0 ? Math.round((1000 * n) / d) / 10 : null);
+
+/**
+ * Exact numbers when there are any. Until the log has watched a lead from
+ * arrival, show what the estimates say - marked as such - rather than a dash.
+ */
+function preferExact(exact: number[], all: number[]): TimeStats {
+  const e = timeStats(exact);
+  if (e.n > 0) return e;
+  const a = timeStats(all);
+  return a.n > 0 ? { ...a, est: true } : e;
+}
 
 export function timeStats(values: number[]): TimeStats {
   const v = values.filter((x) => Number.isFinite(x)).sort((a, b) => a - b);
@@ -389,28 +425,43 @@ const RANK: Record<string, number> = {
 
 export function summarise(rows: LeadSpeed[]): { team: TeamSummary; people: PersonStats[] } {
   const inCrm = rows.filter((r) => r.phase !== "not_in_crm");
-  // Medians only ever come from measured leads; estimates are listed, not averaged.
+  // Medians come from measured leads; estimates only fill in until there are some.
   const timed = inCrm.filter((r) => !r.approx);
+  const routedAll = inCrm.filter((r) => r.router && !r.returning_since);
   const team: TeamSummary = {
     leads: rows.length,
     in_crm: inCrm.length,
     contacted: inCrm.filter((r) => r.phase === "contacted").length,
     untouched: inCrm.filter((r) => r.phase !== "contacted").length,
-    auto_routed: inCrm.filter((r) => r.auto_routed).length,
-    total: timeStats(inCrm.filter((r) => !r.first_approx).map((r) => r.total_min ?? NaN)),
-    routing: timeStats(timed.filter((r) => r.router).map((r) => r.route_min ?? NaN)),
-    pickup: timeStats(timed.map((r) => r.pickup_min ?? NaN)),
+    auto_routed: inCrm.filter((r) => r.auto_routed && !r.returning_since).length,
+    total: preferExact(
+      inCrm.filter((r) => !r.first_approx).map((r) => r.total_min ?? NaN),
+      inCrm.map((r) => r.total_min ?? NaN)
+    ),
+    routing: preferExact(
+      routedAll.filter((r) => !r.approx).map((r) => r.route_min ?? NaN),
+      routedAll.map((r) => r.route_min ?? NaN)
+    ),
+    pickup: preferExact(
+      timed.filter((r) => !r.returning_since).map((r) => r.pickup_min ?? NaN),
+      inCrm.filter((r) => !r.returning_since).map((r) => r.pickup_min ?? NaN)
+    ),
     approx_leads: inCrm.filter((r) => r.approx).length,
+    returning: rows.filter((r) => r.returning_since).length,
+    returning_untouched: rows.filter((r) => r.returning_since && r.phase !== "contacted").length,
   };
 
+  // A returning lead reached nobody's queue as new - 8X kept it on an old
+  // record without alerting anyone - so it is shown, not charged to a person.
+  const scored = inCrm.filter((r) => !r.returning_since);
   const names = new Set<string>();
-  for (const r of inCrm) {
+  for (const r of scored) {
     if (r.handler) names.add(r.handler);
     if (r.router) names.add(r.router);
   }
 
   const people: PersonStats[] = [...names].map((name) => {
-    const mine = inCrm.filter((r) => r.handler === name);
+    const mine = scored.filter((r) => r.handler === name);
     const picked = mine.filter((r) => r.handler_first_at);
     const waiting = mine.filter((r) => !r.handler_first_at);
     const waits = waiting
@@ -418,9 +469,9 @@ export function summarise(rows: LeadSpeed[]): { team: TeamSummary; people: Perso
       .filter((x) => Number.isFinite(x));
     const q = mine.map((r) => r.quality_score).filter((x): x is number => typeof x === "number");
 
-    const routedByMe = inCrm.filter((r) => r.router === name && r.routed_at);
-    const holdingUnrouted = inCrm.filter((r) => r.phase === "awaiting_route" && r.handler === name);
-    const self = inCrm.filter((r) => r.self_handled && r.first_action_by === name);
+    const routedByMe = scored.filter((r) => r.router === name && r.routed_at);
+    const holdingUnrouted = scored.filter((r) => r.phase === "awaiting_route" && r.handler === name);
+    const self = scored.filter((r) => r.self_handled && r.first_action_by === name);
 
     return {
       name,
@@ -429,7 +480,10 @@ export function summarise(rows: LeadSpeed[]): { team: TeamSummary; people: Perso
       picked_up: picked.length,
       not_picked_up: waiting.length,
       oldest_wait_min: waits.length ? Math.max(...waits) : null,
-      pickup: timeStats(picked.filter((r) => !r.approx).map((r) => r.pickup_min ?? NaN)),
+      pickup: preferExact(
+        picked.filter((r) => !r.approx).map((r) => r.pickup_min ?? NaN),
+        picked.map((r) => r.pickup_min ?? NaN)
+      ),
       avg_actions: mine.length ? Math.round((10 * mine.reduce((s, r) => s + r.handler_actions, 0)) / mine.length) / 10 : null,
       followed_up: mine.filter((r) => r.handler_actions >= 2).length,
       no_answer: mine.filter((r) => RANK[r.status] === -1).length,
@@ -438,13 +492,19 @@ export function summarise(rows: LeadSpeed[]): { team: TeamSummary; people: Perso
       disqualified: mine.filter((r) => RANK[r.status] === -2).length,
       avg_quality: q.length ? Math.round(q.reduce((s, x) => s + x, 0) / q.length) : null,
       routed: routedByMe.length,
-      routing: timeStats(routedByMe.filter((r) => !r.approx).map((r) => r.route_min ?? NaN)),
+      routing: preferExact(
+        routedByMe.filter((r) => !r.approx).map((r) => r.route_min ?? NaN),
+        routedByMe.map((r) => r.route_min ?? NaN)
+      ),
       awaiting_route: holdingUnrouted.length,
       oldest_route_wait_min: holdingUnrouted.length
         ? Math.max(...holdingUnrouted.map((r) => r.wait_min ?? 0))
         : null,
       self_handled: self.length,
-      self_contact: timeStats(self.filter((r) => !r.first_approx).map((r) => r.total_min ?? NaN)),
+      self_contact: preferExact(
+        self.filter((r) => !r.first_approx).map((r) => r.total_min ?? NaN),
+        self.map((r) => r.total_min ?? NaN)
+      ),
     };
   });
 

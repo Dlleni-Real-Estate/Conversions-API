@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { STAGE_BY_STATUS, type Status } from "@/lib/stages";
-import type { LeadSpeed, PersonStats, TeamSummary, TimeStats } from "@/lib/speed";
+import { TEAM_LEADERS, type LeadSpeed, type PersonStats, type TeamSummary, type TimeStats } from "@/lib/speed";
 import { Badge, Card, Empty, MetricGrid, SectionTitle, Stat, Td, Th, fmtDate, fmtInt, fmtPct } from "./ui";
 import { useLang } from "./LangProvider";
 
@@ -29,9 +29,15 @@ export function fmtWork(min: number | null | undefined, lang: "en" | "ar"): stri
   return r ? `${h}h ${r}m` : `${h}h`;
 }
 
+/** A median, with "~" in front when it is built from estimated leads only. */
+function fmtStat(s: TimeStats, lang: "en" | "ar"): string {
+  if (s.median === null) return "—";
+  return `${s.est ? "~" : ""}${fmtWork(s.median, lang)}`;
+}
+
 /** Green under 15 working minutes, amber under an hour, red beyond. */
-function speedTone(min: number | null | undefined): "good" | "default" | "bad" | "muted" {
-  if (min === null || min === undefined) return "muted";
+function speedTone(min: number | null | undefined, est = false): "good" | "default" | "bad" | "muted" {
+  if (min === null || min === undefined || est) return "muted";
   if (min <= 15) return "good";
   if (min <= 60) return "default";
   return "bad";
@@ -41,8 +47,10 @@ const toneText = {
   good: "text-emerald-700",
   default: "text-amber-700",
   bad: "text-red-600",
-  muted: "text-slate-400",
+  muted: "text-slate-500",
 } as const;
+
+type LeadFilter = "all" | "waiting" | "returning";
 
 export default function TeamView({
   data,
@@ -58,10 +66,18 @@ export default function TeamView({
   const { t, lang, locale } = useLang();
   const [open, setOpen] = useState<string | null>(null);
   const [showHow, setShowHow] = useState(false);
+  const [filter, setFilter] = useState<LeadFilter>("all");
 
   const leaders = useMemo(() => (data?.people ?? []).filter((p) => p.is_leader), [data]);
   const agents = useMemo(() => (data?.people ?? []).filter((p) => !p.is_leader), [data]);
   const person = open ? data?.people.find((p) => p.name === open) ?? null : null;
+
+  const leadRows = useMemo(() => {
+    const all = [...(data?.leads ?? [])].sort((a, b) => Date.parse(b.arrived_at) - Date.parse(a.arrived_at));
+    if (filter === "waiting") return all.filter((l) => l.phase === "awaiting_route" || l.phase === "awaiting_agent");
+    if (filter === "returning") return all.filter((l) => l.returning_since);
+    return all;
+  }, [data, filter]);
 
   const periodPicker = (
     <select
@@ -86,6 +102,8 @@ export default function TeamView({
 
   const { team } = data;
   const pctOf = (n: number, d: number) => (d > 0 ? Math.round((1000 * n) / d) / 10 : null);
+  const waitingCount = data.leads.filter((l) => l.phase === "awaiting_route" || l.phase === "awaiting_agent").length;
+  const estNote = (s: TimeStats) => (s.est ? ` · ${t.tmEstMedian}` : "");
 
   return (
     <div className="space-y-6">
@@ -97,23 +115,23 @@ export default function TeamView({
             <>
               <Stat
                 label={t.tmTotal}
-                value={fmtWork(team.total.median, lang)}
-                sub={t.tmTotalSub}
-                tone={speedTone(team.total.median)}
+                value={fmtStat(team.total, lang)}
+                sub={t.tmTotalSub + estNote(team.total)}
+                tone={speedTone(team.total.median, team.total.est)}
                 accent="#0f172a"
               />
               <Stat
                 label={t.tmRouting}
-                value={fmtWork(team.routing.median, lang)}
-                sub={t.tmRoutingSub}
-                tone={speedTone(team.routing.median)}
+                value={fmtStat(team.routing, lang)}
+                sub={t.tmRoutingSub + estNote(team.routing)}
+                tone={speedTone(team.routing.median, team.routing.est)}
                 accent="#7c3aed"
               />
               <Stat
                 label={t.tmPickup}
-                value={fmtWork(team.pickup.median, lang)}
-                sub={t.tmPickupSub}
-                tone={speedTone(team.pickup.median)}
+                value={fmtStat(team.pickup, lang)}
+                sub={t.tmPickupSub + estNote(team.pickup)}
+                tone={speedTone(team.pickup.median, team.pickup.est)}
                 accent="#059669"
               />
               <Stat
@@ -141,11 +159,29 @@ export default function TeamView({
                 sub={`${fmtPct(pctOf(team.auto_routed, team.in_crm))}`}
                 tone="muted"
               />
+              <Stat
+                label={t.tmReturning}
+                value={fmtInt(team.returning)}
+                sub={`${fmtInt(team.returning_untouched)} ${t.tmReturningUntouchedSub}`}
+                tone={team.returning_untouched > 0 ? "bad" : "muted"}
+              />
             </>
           }
           moreLabel={t.showAllMetrics}
           lessLabel={t.showFewer}
         />
+
+        {team.returning_untouched > 0 && (
+          <div className="mt-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+            <span className="font-semibold">
+              {fmtInt(team.returning_untouched)} {t.tmReturningAlertTitle}
+            </span>{" "}
+            {t.tmReturningAlert}{" "}
+            <button onClick={() => setFilter("returning")} className="font-medium underline">
+              {t.tmShowThem}
+            </button>
+          </div>
+        )}
 
         <div className="mt-3 space-y-1.5 text-xs text-slate-500">
           <p>
@@ -171,6 +207,7 @@ export default function TeamView({
               <li>{t.tmHow3}</li>
               <li>{t.tmHow4}</li>
               <li>{t.tmHow5}</li>
+              <li>{t.tmHow6}</li>
             </ul>
           )}
         </div>
@@ -217,13 +254,20 @@ export default function TeamView({
                   {agents.map((p) => (
                     <tr key={p.name} className="hover:bg-slate-50">
                       <Td>
-                        <button onClick={() => setOpen(p.name)} className="whitespace-nowrap font-medium text-brand-700 hover:underline" dir="auto">
+                        <button
+                          onClick={() => setOpen(p.name)}
+                          className="whitespace-nowrap font-medium text-brand-700 hover:underline"
+                          dir="auto"
+                        >
                           {p.name}
                         </button>
                       </Td>
                       <Td align="right">{fmtInt(p.leads)}</Td>
-                      <Td align="right" className={`font-semibold ${toneText[speedTone(p.pickup.median)]}`}>
-                        {fmtWork(p.pickup.median, lang)}
+                      <Td
+                        align="right"
+                        className={`font-semibold ${toneText[speedTone(p.pickup.median, p.pickup.est)]}`}
+                      >
+                        <span title={p.pickup.est ? t.tmEstMedian : undefined}>{fmtStat(p.pickup, lang)}</span>
                         <span className="ms-1 text-[11px] font-normal text-slate-400">({fmtInt(p.pickup.n)})</span>
                       </Td>
                       <Td align="right">{fmtPct(p.pickup.within15)}</Td>
@@ -245,6 +289,40 @@ export default function TeamView({
               </table>
             </Card>
           </div>
+
+          <div>
+            <SectionTitle
+              title={t.tmTimelineTitle}
+              subtitle={t.tmTimelineSub}
+              accent="#0f172a"
+              right={
+                <span className="ms-auto flex gap-1">
+                  {(
+                    [
+                      ["all", t.tmFilterAll, data.leads.length],
+                      ["waiting", t.tmFilterWaiting, waitingCount],
+                      ["returning", t.tmFilterReturning, team.returning],
+                    ] as const
+                  ).map(([key, label, n]) => (
+                    <button
+                      key={key}
+                      onClick={() => setFilter(key)}
+                      className={`tap rounded-lg border px-2.5 py-1 text-xs font-medium ${
+                        filter === key
+                          ? "border-brand-600 bg-brand-50 text-brand-800"
+                          : "border-slate-300 bg-white text-slate-600 hover:bg-slate-50"
+                      }`}
+                    >
+                      {label} <span className="text-slate-400">{fmtInt(n)}</span>
+                    </button>
+                  ))}
+                </span>
+              }
+            />
+            <Card className="overflow-x-auto">
+              <LeadTimeline rows={leadRows} />
+            </Card>
+          </div>
         </>
       )}
 
@@ -256,6 +334,169 @@ export default function TeamView({
         />
       )}
     </div>
+  );
+}
+
+/**
+ * One row per lead, left to right in the order things happened: it arrived,
+ * the team leader routed it (or did not), the agent acted (or did not). Every
+ * gap is working time, and each one sits in the column of the person it
+ * belongs to.
+ */
+function LeadTimeline({ rows }: { rows: LeadSpeed[] }) {
+  const { t, s: stageName, lang, locale } = useLang();
+  if (rows.length === 0) return <Empty>{t.tmNoData}</Empty>;
+
+  const est = (l: LeadSpeed) => (l.approx ? "~" : "");
+  // Clock time next to working time, when they differ: "0m" for a lead worked
+  // at 10:40, before the working day starts, reads as a bug without it.
+  const clock = (from: string | null, to: string | null, work: number | null) => {
+    if (!from || !to) return null;
+    const m = Math.max(0, Math.round((Date.parse(to) - Date.parse(from)) / 60000));
+    if (work !== null && Math.abs(m - work) < 2) return null;
+    return ` · ${fmtWork(m, lang)} ${t.tmClock}`;
+  };
+
+  return (
+    <table className="w-full min-w-[980px] text-xs">
+      <thead className="border-b border-slate-200 bg-slate-100">
+        <tr>
+          <Th>{t.leads}</Th>
+          <Th>{t.tmArrived}</Th>
+          <Th>{t.tmRouteCol}</Th>
+          <Th>{t.tmAgentCol}</Th>
+          <Th>{t.tmPickupCol}</Th>
+          <Th align="right">{t.tmTotalCol}</Th>
+          <Th>{t.tmStage}</Th>
+        </tr>
+      </thead>
+      <tbody className="divide-y divide-slate-200">
+        {rows.slice(0, 300).map((l) => {
+          const stage = STAGE_BY_STATUS[l.status as Status];
+          // A leader who kept the lead is not "the agent" - her work shows
+          // in the routing column instead.
+          const handlerIsLeader = !!l.handler && TEAM_LEADERS.has(l.handler);
+          const agent = l.routed_to ?? (handlerIsLeader ? null : l.handler);
+
+          // ── Routing cell ────────────────────────────────────────────────
+          let routing: React.ReactNode;
+          if (l.phase === "not_in_crm") {
+            routing = <span className="text-slate-400">{t.tmPhase_not_in_crm}</span>;
+          } else if (l.returning_since) {
+            routing = (
+              <span className="text-red-700">
+                {t.tmReturningRoute}
+                <span className="block text-[10px] text-slate-500">
+                  {t.tmReturningSince} {fmtDate(l.returning_since, locale)}
+                </span>
+              </span>
+            );
+          } else if (l.auto_routed) {
+            routing = <span className="text-slate-500">{t.tmAutoShort}</span>;
+          } else if (l.routed_at) {
+            routing = (
+              <span className={toneText[speedTone(l.route_min, l.approx)]}>
+                <span className="font-semibold">
+                  {est(l)}
+                  {fmtWork(l.route_min, lang)}
+                </span>
+                <span className="block text-[10px] text-slate-500" dir="auto">
+                  {l.router ?? "—"} · {fmtDate(l.routed_at, locale)}
+                  {clock(l.arrived_at, l.routed_at, l.route_min)}
+                </span>
+              </span>
+            );
+          } else if (l.phase === "awaiting_route") {
+            routing = (
+              <span className="font-semibold text-red-600">
+                {t.tmNotRoutedYet} {fmtWork(l.wait_min, lang)}
+                <span className="block text-[10px] font-normal text-slate-500" dir="auto">{l.handler}</span>
+              </span>
+            );
+          } else {
+            routing = <span className="text-slate-400">—</span>;
+          }
+          const selfNote = l.self_handled ? (
+            <span className="mt-0.5 block text-[10px] text-emerald-700" dir="auto">
+              {l.first_action_by} {t.tmSelfFirst} {est(l)}
+              {fmtWork(l.total_min, lang)}
+            </span>
+          ) : null;
+
+          // ── Agent pickup cell ──────────────────────────────────────────
+          let pickup: React.ReactNode;
+          if (l.handler_first_at && !handlerIsLeader) {
+            pickup = (
+              <span className={toneText[speedTone(l.pickup_min, l.approx)]}>
+                <span className="font-semibold">
+                  {est(l)}
+                  {fmtWork(l.pickup_min, lang)}
+                </span>
+                <span className="block text-[10px] text-slate-500">
+                  {fmtDate(l.handler_first_at, locale)}
+                  {clock(l.handler_since, l.handler_first_at, l.pickup_min)}
+                </span>
+              </span>
+            );
+          } else if (l.phase === "awaiting_agent" && !handlerIsLeader) {
+            pickup = (
+              <span className="font-semibold text-red-600">
+                {t.tmNotYet} {fmtWork(l.wait_min, lang)}
+              </span>
+            );
+          } else if (l.phase === "contacted" && !l.handler_first_at) {
+            pickup = <span className="text-slate-500">{t.tmNoAgentAction}</span>;
+          } else {
+            pickup = <span className="text-slate-400">—</span>;
+          }
+
+          return (
+            <tr key={l.lead_id} className="align-top">
+              <Td>
+                <div dir="auto" className="font-medium text-slate-800">
+                  {l.full_name || "—"}
+                </div>
+                <div dir="auto" className="max-w-[16rem] truncate text-[10px] text-slate-400">
+                  {l.adset_name || l.campaign_name || ""}
+                </div>
+                <div className="mt-0.5 flex gap-1">
+                  {l.returning_since && (
+                    <Badge className="border-red-300 bg-red-50 text-[10px] text-red-700">{t.tmReturningBadge}</Badge>
+                  )}
+                  {l.approx && (
+                    <Badge className="border-amber-300 bg-amber-50 text-[10px] text-amber-700">{t.tmEst}</Badge>
+                  )}
+                </div>
+              </Td>
+              <Td className="whitespace-nowrap text-slate-600">{fmtDate(l.arrived_at, locale)}</Td>
+              <Td className="whitespace-nowrap">
+                {routing}
+                {selfNote}
+              </Td>
+              <Td className="whitespace-nowrap text-slate-700">
+                <span dir="auto">{agent ?? "—"}</span>
+              </Td>
+              <Td className="whitespace-nowrap">{pickup}</Td>
+              <Td align="right" className="whitespace-nowrap">
+                {l.first_action_at ? (
+                  <span className={toneText[speedTone(l.total_min, l.first_approx)]}>
+                    {l.first_approx ? "~" : ""}
+                    {fmtWork(l.total_min, lang)}
+                  </span>
+                ) : l.wait_min !== null ? (
+                  <span className="text-red-600">
+                    {t.tmWaiting} {fmtWork(l.wait_min, lang)}
+                  </span>
+                ) : (
+                  <span className="text-slate-400">—</span>
+                )}
+              </Td>
+              <Td>{stage ? <Badge className={stage.color}>{stageName(l.status as Status)}</Badge> : l.status}</Td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
   );
 }
 
@@ -273,9 +514,9 @@ function LeaderCard({ p, onOpen }: { p: PersonStats; onOpen: () => void }) {
       <div className="grid grid-cols-2 gap-2.5 p-4">
         <Stat
           label={t.tmRoutingMedian}
-          value={fmtWork(p.routing.median, lang)}
-          sub={`${t.tmRouted} ${fmtInt(p.routed)} · ${t.tmWithin15} ${fmtPct(p.routing.within15)}`}
-          tone={speedTone(p.routing.median)}
+          value={fmtStat(p.routing, lang)}
+          sub={`${t.tmRouted} ${fmtInt(p.routed)} · ${t.tmWithin15} ${fmtPct(p.routing.within15)}${p.routing.est ? ` · ${t.tmEstMedian}` : ""}`}
+          tone={speedTone(p.routing.median, p.routing.est)}
           accent="#7c3aed"
         />
         <Stat
@@ -288,13 +529,13 @@ function LeaderCard({ p, onOpen }: { p: PersonStats; onOpen: () => void }) {
         <Stat
           label={t.tmSelfHandled}
           value={fmtInt(p.self_handled)}
-          sub={`${t.tmSelfContact} ${fmtWork(p.self_contact.median, lang)}`}
+          sub={`${t.tmSelfContact} ${fmtStat(p.self_contact, lang)}`}
           accent="#059669"
         />
         <Stat
           label={t.tmOwnLeads}
           value={fmtInt(p.leads)}
-          sub={`${t.tmColMedian} ${fmtWork(p.pickup.median, lang)}`}
+          sub={`${t.tmColMedian} ${fmtStat(p.pickup, lang)}`}
           tone={p.leads ? "default" : "muted"}
         />
       </div>
@@ -307,9 +548,10 @@ function TimeBlock({ label, s }: { label: string; s: TimeStats }) {
   return (
     <div className="rounded-xl border border-slate-200 p-3">
       <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">{label}</div>
-      <div className={`mt-1 text-xl font-semibold tabular-nums ${toneText[speedTone(s.median)]}`}>
-        {fmtWork(s.median, lang)}
+      <div className={`mt-1 text-xl font-semibold tabular-nums ${toneText[speedTone(s.median, s.est)]}`}>
+        {fmtStat(s, lang)}
         <span className="ms-1.5 text-xs font-normal text-slate-400">n={s.n}</span>
+        {s.est && <span className="ms-1.5 text-xs font-normal text-amber-700">{t.tmEstMedian}</span>}
       </div>
       <div className="mt-1 flex flex-wrap gap-x-3 text-xs text-slate-500">
         <span>{t.tmWithin15}: {fmtPct(s.within15)}</span>
@@ -321,7 +563,7 @@ function TimeBlock({ label, s }: { label: string; s: TimeStats }) {
 }
 
 function Profile({ p, leads, onClose }: { p: PersonStats; leads: LeadSpeed[]; onClose: () => void }) {
-  const { t, s: stageName, lang, locale } = useLang();
+  const { t, lang } = useLang();
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -334,7 +576,7 @@ function Profile({ p, leads, onClose }: { p: PersonStats; leads: LeadSpeed[]; on
   return (
     <div className="fixed inset-0 z-40 flex justify-end">
       <div className="absolute inset-0 bg-slate-900/30 backdrop-blur-[2px]" onClick={onClose} />
-      <aside className="relative z-10 flex h-full w-full flex-col overflow-y-auto bg-white shadow-panel md:max-w-3xl md:border-s md:border-slate-200">
+      <aside className="relative z-10 flex h-full w-full flex-col overflow-y-auto bg-white shadow-panel md:max-w-4xl md:border-s md:border-slate-200">
         <header className="sticky top-0 z-10 border-b border-slate-100 bg-white/95 px-6 py-4 backdrop-blur">
           <div className="flex items-start justify-between gap-4">
             <div>
@@ -394,83 +636,7 @@ function Profile({ p, leads, onClose }: { p: PersonStats; leads: LeadSpeed[]; on
           <section>
             <h3 className="mb-2 text-sm font-semibold">{t.tmLeadList}</h3>
             <div className="overflow-x-auto rounded-xl border border-slate-200">
-              <table className="w-full min-w-[720px] text-xs">
-                <thead className="border-b border-slate-200 bg-slate-100">
-                  <tr>
-                    <Th>{t.leads}</Th>
-                    <Th>{t.tmArrived}</Th>
-                    <Th align="right">{t.tmRouteCol}</Th>
-                    <Th align="right">{t.tmPickupCol}</Th>
-                    <Th>{t.tmFirstAction}</Th>
-                    <Th>{t.tmStage}</Th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-200">
-                  {rows.map((l) => {
-                    const stage = STAGE_BY_STATUS[l.status as Status];
-                    const mineToPick = l.handler === p.name;
-                    return (
-                      <tr key={l.lead_id} className="align-top">
-                        <Td>
-                          <div dir="auto" className="font-medium text-slate-800">{l.full_name || "—"}</div>
-                          <div dir="auto" className="text-[11px] text-slate-400">{l.adset_name || l.campaign_name || ""}</div>
-                        </Td>
-                        <Td className="whitespace-nowrap text-slate-600">
-                          {fmtDate(l.arrived_at, locale)}
-                          {l.approx && <span className="ms-1 text-[10px] text-amber-600">{t.tmEst}</span>}
-                        </Td>
-                        <Td align="right" className="whitespace-nowrap">
-                          {l.auto_routed ? (
-                            <span className="text-slate-400">{t.tmAutoShort}</span>
-                          ) : l.route_min !== null ? (
-                            <span className={l.approx ? "text-slate-400" : toneText[speedTone(l.route_min)]}>
-                              {l.approx ? "~" : ""}
-                              {fmtWork(l.route_min, lang)}
-                              {l.router && l.router !== p.name && (
-                                <span className="block text-[10px] text-slate-400" dir="auto">{l.router}</span>
-                              )}
-                            </span>
-                          ) : (
-                            <span className="text-slate-400">—</span>
-                          )}
-                        </Td>
-                        <Td align="right" className="whitespace-nowrap">
-                          {mineToPick ? (
-                            l.pickup_min !== null ? (
-                              <span className={l.approx ? "text-slate-400" : `font-semibold ${toneText[speedTone(l.pickup_min)]}`}>
-                                {l.approx ? "~" : ""}
-                                {fmtWork(l.pickup_min, lang)}
-                              </span>
-                            ) : (
-                              <span className="font-semibold text-red-600">
-                                {t.tmWaiting}
-                                {l.wait_min !== null && ` ${fmtWork(l.wait_min, lang)}`}
-                              </span>
-                            )
-                          ) : (
-                            <span className="text-slate-400" dir="auto">{l.handler ?? "—"}</span>
-                          )}
-                        </Td>
-                        <Td className="whitespace-nowrap text-slate-600">
-                          {l.first_action_at ? (
-                            <>
-                              {fmtDate(l.first_action_at, locale)}
-                              <span className="block text-[10px] text-slate-400" dir="auto">
-                                {l.self_handled ? `${l.first_action_by} · ${t.tmSelfShort}` : l.first_action_by}
-                              </span>
-                            </>
-                          ) : (
-                            <span className="text-red-600">{t[`tmPhase_${l.phase}` as const]}</span>
-                          )}
-                        </Td>
-                        <Td>
-                          {stage ? <Badge className={stage.color}>{stageName(l.status as Status)}</Badge> : l.status}
-                        </Td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+              <LeadTimeline rows={rows} />
             </div>
           </section>
         </div>

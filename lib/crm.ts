@@ -543,6 +543,33 @@ export async function crmPage(start: number, length: number, timeoutMs = 12_000)
   };
 }
 
+/**
+ * Find a person in 8X by phone - the same call 8X's own Workspace search box
+ * makes (captured from the browser): a DataTables search over these columns,
+ * with the national number minus its leading 0.
+ *
+ * This is how a RETURNING lead is found. When someone already in 8X fills a
+ * form again, 8X folds the submission into the old record instead of creating
+ * a lead, so no new row appears at the top of the list and the paged read
+ * never reaches the months-old one it went into.
+ */
+export async function crmSearchByPhone(stored: string, timeoutMs = 8_000) {
+  const d = String(stored ?? "").replace(/\D/g, "");
+  const needle = d.startsWith("20") ? d.slice(2) : d.startsWith("0") ? d.slice(1) : d.slice(-9);
+  if (needle.length < 8) return [] as Record<string, unknown>[];
+  const body = {
+    start: 0,
+    length: 10,
+    columns: ["id", "full_name", "company", "title", "phones.phone"].map((name) => ({ name, searchable: true })),
+    search: { value: needle, regex: false },
+    leads_calls_type: "any",
+  };
+  const r = await rawExported("POST", "/api/v4/leads/leads", JSON.stringify(body), timeoutMs);
+  if (r.status !== 200) throw new Error(`v4 search HTTP ${r.status}`);
+  const parsed = JSON.parse(r.text) as { data?: { data?: unknown[] } };
+  return (parsed.data?.data ?? []) as Record<string, unknown>[];
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Writing a lead INTO 8X
 //
