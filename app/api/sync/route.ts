@@ -63,6 +63,19 @@ const OVERLAP_MS = 2 * 60 * 60 * 1000;
  * Meta accepts stage events for seven days.
  */
 const RUN_BUDGET_MS = 54_000;
+
+/**
+ * Resolve with `fallback` if `p` has not settled in `ms`. The step keeps
+ * running in the background, but the run moves on - one stuck dependency
+ * must never take every other step down with it.
+ */
+function withDeadline<T>(p: Promise<T>, ms: number, fallback: () => T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<T>((resolve) => {
+    timer = setTimeout(() => resolve(fallback()), Math.max(0, ms));
+  });
+  return Promise.race([p, late]).finally(() => clearTimeout(timer));
+}
 /** Never START reading a campaign's leads with less than this left. */
 const LEADS_MIN_LEFT_MS = 12_000;
 
@@ -121,7 +134,13 @@ export async function GET(req: NextRequest) {
       req.nextUrl.searchParams.get("crm") === "deep" ||
       new Date().getUTCMinutes() < 10 ||
       (assignmentsLogged ?? 0) === 0;
-    crm = await syncCrmStatuses(db, { deep, budgetMs: deep ? 16_000 : 7_000 });
+    const crmBudget = deep ? 16_000 : 7_000;
+    // The page reads inside are bounded by the budget; the database writes
+    // after them are not, so the whole step gets a hard ceiling as well.
+    crm = await withDeadline(syncCrmStatuses(db, { deep, budgetMs: crmBudget }), crmBudget + 8_000, () => {
+      console.error(`[sync] crm: gave up after ${(crmBudget + 8_000) / 1000}s - 8X or the database is stuck; the rest of the run carries on`);
+      return skippedResult("timed out");
+    });
     done("crm");
 
     // 2. Quality scores follow every stage move the mirror just brought in,
@@ -638,13 +657,17 @@ async function pushLeadsToCrm(
 
     let result;
     try {
-      result = await crmStoreLead({
-        fullName: lead.full_name,
-        phone: lead.phone,
-        email: lead.email,
-        formId: lead.form_id,
-        description: fitDescription(lines),
-      });
+      result = await crmStoreLead(
+        {
+          fullName: lead.full_name,
+          phone: lead.phone,
+          email: lead.email,
+          formId: lead.form_id,
+          description: fitDescription(lines),
+        },
+        // Never longer than what is left of this step's budget.
+        Math.min(15_000, Math.max(2_000, budgetMs - (Date.now() - pushStarted)))
+      );
     } catch (err) {
       result = { ok: false, status: 0, body: err instanceof Error ? err.message : String(err) };
     }
@@ -1136,7 +1159,10 @@ async function syncCrmStatuses(
         (s) => total === 0 || s < total
       );
       if (starts.length === 0) break;
-      const pages = await Promise.all(starts.map((s) => crmPage(s, CRM_PAGE)));
+      // Each read gets only what is left of the budget, so a slow 8X costs
+      // this step its budget and nothing more.
+      const left = Math.min(12_000, Math.max(2_000, CRM_BUDGET_MS - (Date.now() - startedAt)));
+      const pages = await Promise.all(starts.map((s) => crmPage(s, CRM_PAGE, left)));
       let empty = false;
       for (const page of pages) {
         total = page.total;

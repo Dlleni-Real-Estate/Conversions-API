@@ -74,8 +74,19 @@ function raw(method: string, path: string, body: string | null, timeoutMs = 20_0
         res.setEncoding("utf8");
         res.on("data", (c) => (text += c));
         res.on("end", () => resolve({ status: res.statusCode || 0, text }));
+        res.on("error", reject);
+        res.on("aborted", () => reject(new Error("CRM response aborted")));
       }
     );
+    // `timeout` above is an IDLE timer: every byte resets it, so a server that
+    // accepts the call and then stalls or trickles can hold it for as long as
+    // it likes. That is how one 8X hiccup ran a whole sync into Vercel's 60s
+    // wall. This one is wall-clock and does not reset.
+    const hard = setTimeout(
+      () => req.destroy(new Error(`CRM request exceeded ${Math.round(timeoutMs / 1000)}s`)),
+      timeoutMs
+    );
+    req.on("close", () => clearTimeout(hard));
     req.on("timeout", () => req.destroy(new Error("CRM request timed out")));
     req.on("error", reject);
     if (body) req.write(body);
@@ -520,10 +531,10 @@ export const rawExported = raw;
  * page one, which counts identically to a page that worked, so the giveaway
  * was the first row id staying put rather than the row count.
  */
-export async function crmPage(start: number, length: number) {
+export async function crmPage(start: number, length: number, timeoutMs = 12_000) {
   // 12s, not 20: the sync runs this first on a shared 60s clock, and one hung
   // page should cost the run a page, not the run.
-  const r = await rawExported("POST", "/api/v4/leads/leads", JSON.stringify({ start, length }), 12_000);
+  const r = await rawExported("POST", "/api/v4/leads/leads", JSON.stringify({ start, length }), timeoutMs);
   if (r.status !== 200) throw new Error(`v4 HTTP ${r.status}`);
   const parsed = JSON.parse(r.text) as { data?: { recordsTotal?: number; data?: unknown[] } };
   return {
@@ -601,7 +612,7 @@ function countryOf(stored?: string | null): string {
   return "EG";
 }
 
-export async function crmStoreLead(input: StoreLeadInput): Promise<StoreLeadResult> {
+export async function crmStoreLead(input: StoreLeadInput, timeoutMs = 20_000): Promise<StoreLeadResult> {
   const country = countryOf(input.phone);
   // Egyptian numbers go in the local form people search by; foreign numbers
   // keep their international digits - "0" + a Jordanian number is nothing.
@@ -628,6 +639,6 @@ export async function crmStoreLead(input: StoreLeadInput): Promise<StoreLeadResu
     form_id: input.formId ?? "",
   };
 
-  const r = await raw("POST", STORE_LEAD_PATH, JSON.stringify(payload));
+  const r = await raw("POST", STORE_LEAD_PATH, JSON.stringify(payload), timeoutMs);
   return { ok: r.status >= 200 && r.status < 300, status: r.status, body: r.text.slice(0, 300) };
 }
