@@ -494,7 +494,9 @@ export async function listLeadForms(scope?: AccountScope): Promise<LeadForm[]> {
     const page: { data: LeadForm[]; paging?: { cursors?: { after?: string }; next?: string } } =
       await graph(
         `/${pageId}/leadgen_forms`,
-        { fields: "id,name,status,leads_count", limit: "100", ...(after ? { after } : {}) },
+        // No leads_count: Meta counts every form's leads to answer it, which
+        // made this one listing cost seconds per page, and nothing reads it.
+        { fields: "id,name,status", limit: "100", ...(after ? { after } : {}) },
         pageToken
       );
     out.push(...(page.data || []));

@@ -56,7 +56,7 @@ export type CallShape = "get-body" | "get-query" | "post-body";
 
 type RawResponse = { status: number; text: string; shape: CallShape };
 
-function raw(method: string, path: string, body: string | null): Promise<{ status: number; text: string }> {
+function raw(method: string, path: string, body: string | null, timeoutMs = 20_000): Promise<{ status: number; text: string }> {
   return new Promise((resolve, reject) => {
     const u = new URL(BASE + path);
     const headers: Record<string, string> = {
@@ -68,7 +68,7 @@ function raw(method: string, path: string, body: string | null): Promise<{ statu
     if (body) headers["Content-Length"] = String(Buffer.byteLength(body));
 
     const req = https.request(
-      { hostname: u.hostname, path: u.pathname + u.search, method, headers, timeout: 20_000 },
+      { hostname: u.hostname, path: u.pathname + u.search, method, headers, timeout: timeoutMs },
       (res) => {
         let text = "";
         res.setEncoding("utf8");
@@ -521,7 +521,9 @@ export const rawExported = raw;
  * was the first row id staying put rather than the row count.
  */
 export async function crmPage(start: number, length: number) {
-  const r = await rawExported("POST", "/api/v4/leads/leads", JSON.stringify({ start, length }));
+  // 12s, not 20: the sync runs this first on a shared 60s clock, and one hung
+  // page should cost the run a page, not the run.
+  const r = await rawExported("POST", "/api/v4/leads/leads", JSON.stringify({ start, length }), 12_000);
   if (r.status !== 200) throw new Error(`v4 HTTP ${r.status}`);
   const parsed = JSON.parse(r.text) as { data?: { recordsTotal?: number; data?: unknown[] } };
   return {

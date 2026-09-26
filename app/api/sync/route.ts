@@ -51,13 +51,20 @@ const OVERLAP_MS = 2 * 60 * 60 * 1000;
  * kills the function at that mark mid-write, so the run stops STARTING work
  * well before it. Before this existed, 85% of runs in a day were killed, and
  * because the steps ran in a fixed order the ones at the end - the CRM mirror
- * and the Meta stage events - were the ones that starved. The order below puts
- * what matters first and lets the cosmetic steps take whatever is left.
+ * and the Meta stage events - were the ones that starved.
+ *
+ * So the order is by what can wait, not by what feeds what:
+ *   1. the 8X mirror       - stages, owners, the speed-to-lead log (8X + DB only)
+ *   2. quality + stage events to Meta - the optimisation signal
+ *   3. new leads from Meta - Graph is the slow, erratic part; a lead missed
+ *      here is re-read next run through the 2h overlap window
+ *   4. CRM push, spend, form wording - with whatever time is left
+ * A lead read in step 3 reaches steps 1-2 on the next run, ten minutes later;
+ * Meta accepts stage events for seven days.
  */
 const RUN_BUDGET_MS = 54_000;
-/** Stop starting new campaigns' lead reads past this point. Missed ones are
- * picked up next run - the 2h overlap window re-reads them. */
-const LEADS_PHASE_MS = 26_000;
+/** Never START reading a campaign's leads with less than this left. */
+const LEADS_MIN_LEFT_MS = 12_000;
 
 /**
  * Pulls leads from the TRACKED campaigns only — see lib/tracking.ts for how a
@@ -93,6 +100,46 @@ export async function GET(req: NextRequest) {
   }[] = [];
 
   try {
+    const phase: Record<string, number> = {};
+    let lap = Date.now();
+    const done = (name: string) => {
+      phase[name] = Date.now() - lap;
+      lap = Date.now();
+    };
+
+    // 1. What the sales team actually did, read back out of 8X CRM. This is
+    // the only thing that fills `status`; nobody types stages into this app.
+    //
+    // Every run reads the newest pages (new leads, first touches - what the
+    // speed-to-lead clock needs); once an hour, and on the first run with an
+    // empty assignment log, it walks as deep as its budget allows so stage
+    // moves on older leads are mirrored too.
+    const { count: assignmentsLogged } = await db
+      .from("lead_assignments")
+      .select("lead_id", { count: "exact", head: true });
+    const deep =
+      req.nextUrl.searchParams.get("crm") === "deep" ||
+      new Date().getUTCMinutes() < 10 ||
+      (assignmentsLogged ?? 0) === 0;
+    crm = await syncCrmStatuses(db, { deep, budgetMs: deep ? 16_000 : 7_000 });
+    done("crm");
+
+    // 2. Quality scores follow every stage move the mirror just brought in,
+    // then every stage each lead has reached goes to Meta if it never did.
+    await refreshQualityScores(db);
+    stageEvents = await sendMissingStageEvents(db);
+    done("capi");
+
+    // Once an hour on the sync that lands in the first ten-minute slot: renew
+    // any Facebook Login token inside its warning window. This is the only
+    // schedule the deployment guarantees, so the renewal lives on it.
+    if (new Date().getUTCMinutes() < 10) {
+      const t = await renewExpiringTokens();
+      if (t.checked > 0) console.log(`[sync] tokens: checked=${t.checked} renewed=${t.refreshed} declined=${t.failed}`);
+      done("tokens");
+    }
+
+    // 3. New leads from Meta.
     // Every connected ad account, each with the dataset Meta confirmed is
     // connected to it. The rule lives in lib/accounts.ts so that this route and
     // the campaigns route can never disagree about which accounts are live -
@@ -107,6 +154,10 @@ export async function GET(req: NextRequest) {
     const scopeOf = new Map<string, AccountScope>();
     const everyCampaign = [];
     for (const acc of accounts) {
+      if (remaining() < LEADS_MIN_LEFT_MS) {
+        deferred.push(`(account ${acc.name || acc.adAccountId})`);
+        continue;
+      }
       try {
         const cs = await listCampaigns(acc);
         for (const c of cs) scopeOf.set(c.id, acc);
@@ -136,7 +187,15 @@ export async function GET(req: NextRequest) {
     // would otherwise never be retried: quiet campaigns stop producing new
     // mentions of it.
     const formScopes = new Map<string, AccountScope>();
-    for (const acc of tracked.length > 0 ? accounts : []) {
+    // Names already stored first - the Page-wide form listing is one of the
+    // slowest Graph reads in the run, so it only happens with time to spare.
+    {
+      const { data: known } = await db.from("lead_forms").select("form_id,name");
+      for (const f of (known ?? []) as { form_id: string; name: string | null }[]) {
+        if (f.name) formNames.set(String(f.form_id), f.name);
+      }
+    }
+    for (const acc of tracked.length > 0 && remaining() > 30_000 ? accounts : []) {
       try {
         for (const f of await listLeadForms(acc)) {
           formNames.set(f.id, f.name);
@@ -159,7 +218,7 @@ export async function GET(req: NextRequest) {
     const ordered = [...tracked.slice(turn), ...tracked.slice(0, turn)];
 
     for (const campaign of ordered) {
-      if (Date.now() - runStart > LEADS_PHASE_MS) {
+      if (remaining() < LEADS_MIN_LEFT_MS) {
         deferred.push(campaign.name);
         continue;
       }
@@ -274,6 +333,7 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    done("leads");
     if (deferred.length > 0) {
       console.warn(`[sync] run budget: ${deferred.length} campaign(s) wait for the next run: ${deferred.join(" | ")}`);
     }
@@ -282,46 +342,13 @@ export async function GET(req: NextRequest) {
     // explicitly opted in (ad_accounts.crm_push) are pushed - the original
     // account's leads already arrive in 8X through its own Facebook
     // integration, and pushing those would create a second copy of every one.
-    const crmPushed = await pushLeadsToCrm(db, 25, Math.min(12_000, remaining() - 30_000));
-
-    // What the sales team actually did, read back out of 8X CRM. This is the
-    // only thing that fills `status`; nobody types stages into this app.
-    //
-    // Every run reads the newest pages (new leads, first touches - what the
-    // speed-to-lead clock needs); once an hour, and on the first run with an
-    // empty assignment log, it walks as deep as the budget allows so stage
-    // moves on older leads are mirrored too.
-    const { count: assignmentsLogged } = await db
-      .from("lead_assignments")
-      .select("lead_id", { count: "exact", head: true });
-    const deep =
-      req.nextUrl.searchParams.get("crm") === "deep" ||
-      new Date().getUTCMinutes() < 10 ||
-      (assignmentsLogged ?? 0) === 0;
-    crm = await syncCrmStatuses(db, {
-      deep,
-      budgetMs: Math.min(deep ? 22_000 : 9_000, remaining() - 14_000),
-    });
-
-    // Quality scores follow every stage move the mirror just brought in.
-    await refreshQualityScores(db);
-
-    // Every stage each lead has reached, for any that never made it to Meta.
-    stageEvents = await sendMissingStageEvents(db);
-
-    // Once an hour on the sync that lands in the first ten-minute slot: renew
-    // any Facebook Login token inside its warning window. This is the only
-    // schedule the deployment guarantees, so the renewal lives on it - ahead
-    // of the insights, which would otherwise eat its time on exactly that run.
-    if (new Date().getUTCMinutes() < 10 && remaining() > 3_000) {
-      const t = await renewExpiringTokens();
-      if (t.checked > 0) console.log(`[sync] tokens: checked=${t.checked} renewed=${t.refreshed} declined=${t.failed}`);
-    }
+    const crmPushed = await pushLeadsToCrm(db, 25, Math.min(10_000, remaining() - 7_000));
+    done("push");
 
     // Spend and delivery, with whatever time is left.
     let insightsSkipped = 0;
     for (const job of insightJobs) {
-      if (remaining() < 9_000) { insightsSkipped++; continue; }
+      if (remaining() < 8_000) { insightsSkipped++; continue; }
       job.entry.spend = await refreshInsights(db, job.campaign.id, job.campaign.created_time, job.scope).then(
         (r) => {
           insightsRows += r.rows;
@@ -338,10 +365,12 @@ export async function GET(req: NextRequest) {
       );
     }
     if (insightsSkipped > 0) console.warn(`[sync] run budget: insights for ${insightsSkipped} campaign(s) wait for the next run`);
+    done("insights");
 
     // The wording of each form — what the customer actually read — so the
     // dashboard can show the Arabic question and answer instead of Meta's keys.
-    const formsStored = remaining() > 7_000 ? await refreshFormSchemas(db, formIdsSeen, formScopes) : 0;
+    const formsStored = remaining() > 6_000 ? await refreshFormSchemas(db, formIdsSeen, formScopes) : 0;
+    done("forms");
 
     if (run?.id) {
       await db
@@ -365,7 +394,8 @@ export async function GET(req: NextRequest) {
         `insights=${insightsRows} forms=${formsStored} ` +
         `crmPush=${crmPushed.pushed}/${crmPushed.pushed + crmPushed.failed}${crmPushed.left ? ` (+${crmPushed.left} queued)` : ""} ` +
         `crm=${crm.skipped ?? `${crm.matched}/${crm.scanned} matched, ${crm.changed} moved, ${crm.owners} owners, ${crm.notes} notes`}` +
-        ` took=${Date.now() - runStart}ms`
+        ` took=${Date.now() - runStart}ms (` +
+        Object.entries(phase).map(([k, v]) => `${k}=${(v / 1000).toFixed(1)}s`).join(" ") + ")"
     );
 
     return NextResponse.json({
@@ -384,6 +414,7 @@ export async function GET(req: NextRequest) {
       crm,
       deferred,
       tookMs: Date.now() - runStart,
+      phaseMs: phase,
       perCampaign,
     });
   } catch (err) {
