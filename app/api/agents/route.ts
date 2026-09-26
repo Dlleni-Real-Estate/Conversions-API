@@ -73,17 +73,21 @@ export async function GET(req: NextRequest) {
   const xBy = new Map<string, ActivityRow[]>();
   for (const x of activities) xBy.set(x.lead_id, [...(xBy.get(x.lead_id) ?? []), x]);
 
-  const now = Date.now();
-  const rows = leads.map((l) => deriveLead(l, aBy.get(l.lead_id) ?? [], xBy.get(l.lead_id) ?? [], now));
-  const { team, people } = summarise(rows);
-
-  // When the assignment log started - numbers before it are partly estimated.
+  // When the assignment log started. Leads that arrived before it are listed
+  // with estimated times and kept out of the medians (see lib/speed.ts).
   const { data: firstLogged } = await db
     .from("lead_assignments")
     .select("first_seen_at")
     .order("first_seen_at", { ascending: true })
     .limit(1)
     .maybeSingle();
+  const trackingSince = firstLogged?.first_seen_at ? Date.parse(firstLogged.first_seen_at) : null;
+
+  const now = Date.now();
+  const rows = leads.map((l) =>
+    deriveLead(l, aBy.get(l.lead_id) ?? [], xBy.get(l.lead_id) ?? [], now, trackingSince)
+  );
+  const { team, people } = summarise(rows);
 
   return NextResponse.json({
     ok: true,

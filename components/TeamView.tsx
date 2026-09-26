@@ -423,7 +423,8 @@ function Profile({ p, leads, onClose }: { p: PersonStats; leads: LeadSpeed[]; on
                           {l.auto_routed ? (
                             <span className="text-slate-400">{t.tmAutoShort}</span>
                           ) : l.route_min !== null ? (
-                            <span className={toneText[speedTone(l.route_min)]}>
+                            <span className={l.approx ? "text-slate-400" : toneText[speedTone(l.route_min)]}>
+                              {l.approx ? "~" : ""}
                               {fmtWork(l.route_min, lang)}
                               {l.router && l.router !== p.name && (
                                 <span className="block text-[10px] text-slate-400" dir="auto">{l.router}</span>
@@ -436,7 +437,10 @@ function Profile({ p, leads, onClose }: { p: PersonStats; leads: LeadSpeed[]; on
                         <Td align="right" className="whitespace-nowrap">
                           {mineToPick ? (
                             l.pickup_min !== null ? (
-                              <span className={`font-semibold ${toneText[speedTone(l.pickup_min)]}`}>{fmtWork(l.pickup_min, lang)}</span>
+                              <span className={l.approx ? "text-slate-400" : `font-semibold ${toneText[speedTone(l.pickup_min)]}`}>
+                                {l.approx ? "~" : ""}
+                                {fmtWork(l.pickup_min, lang)}
+                              </span>
                             ) : (
                               <span className="font-semibold text-red-600">
                                 {t.tmWaiting}

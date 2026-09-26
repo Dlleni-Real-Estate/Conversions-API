@@ -171,7 +171,16 @@ export type LeadSpeed = {
   /** A team leader acted on it herself before handing it on. */
   self_handled: boolean;
   handler_actions: number;
+  /**
+   * Routing and pickup are estimates, so they stay out of every median.
+   * True for a lead that arrived before the assignment log started: 8X
+   * rewrites an assignee's timestamp when a lead is re-assigned, so for those
+   * leads "when the agent got it" may really be "when it was moved to them
+   * days later" - and that would be charged to the wrong person.
+   */
   approx: boolean;
+  /** The first action's time is when the sync noticed it, not when it happened. */
+  first_approx: boolean;
 };
 
 const ms = (iso: string | null | undefined) => (iso ? Date.parse(iso) : NaN);
@@ -181,7 +190,9 @@ export function deriveLead(
   lead: SpeedLeadInput,
   assignmentsIn: AssignmentRow[],
   activitiesIn: ActivityRow[],
-  now = Date.now()
+  now = Date.now(),
+  /** When the assignment log started (ms). Leads older than this are estimates. */
+  trackingSince: number | null = null
 ): LeadSpeed {
   const arrived =
     [ms(lead.crm_created_at), ms(lead.crm_pushed_at), ms(lead.submitted_at)].find((t) => Number.isFinite(t)) ?? now;
@@ -199,7 +210,9 @@ export function deriveLead(
 
   // Before the first sync with the assignment log, all we know is who holds it
   // now. Enough to say whose lead it is; not enough to time a hand-off.
-  let approx = false;
+  // Ten minutes of grace: a lead that landed just before the first logging
+  // run was still seen in the hands of whoever got it first.
+  let approx = trackingSince === null || arrived < trackingSince - 10 * 60_000;
   if (assignments.length === 0 && lead.owner) {
     assignments = lead.owner
       .split(" + ")
@@ -242,7 +255,6 @@ export function deriveLead(
     .sort((a, b) => a.t - b.t);
 
   const first = actions[0] ?? null;
-  if (first?.approx) approx = true;
 
   // The handler: the agent who actually worked it first, else the agent who
   // holds it now. With no agent at all, the leader holding it is the handler.
@@ -299,6 +311,7 @@ export function deriveLead(
     self_handled: selfHandled,
     handler_actions: handlerActs.length,
     approx,
+    first_approx: !!first?.approx,
   };
 }
 
@@ -376,15 +389,17 @@ const RANK: Record<string, number> = {
 
 export function summarise(rows: LeadSpeed[]): { team: TeamSummary; people: PersonStats[] } {
   const inCrm = rows.filter((r) => r.phase !== "not_in_crm");
+  // Medians only ever come from measured leads; estimates are listed, not averaged.
+  const timed = inCrm.filter((r) => !r.approx);
   const team: TeamSummary = {
     leads: rows.length,
     in_crm: inCrm.length,
     contacted: inCrm.filter((r) => r.phase === "contacted").length,
     untouched: inCrm.filter((r) => r.phase !== "contacted").length,
     auto_routed: inCrm.filter((r) => r.auto_routed).length,
-    total: timeStats(inCrm.map((r) => r.total_min ?? NaN)),
-    routing: timeStats(inCrm.filter((r) => r.router).map((r) => r.route_min ?? NaN)),
-    pickup: timeStats(inCrm.map((r) => r.pickup_min ?? NaN)),
+    total: timeStats(inCrm.filter((r) => !r.first_approx).map((r) => r.total_min ?? NaN)),
+    routing: timeStats(timed.filter((r) => r.router).map((r) => r.route_min ?? NaN)),
+    pickup: timeStats(timed.map((r) => r.pickup_min ?? NaN)),
     approx_leads: inCrm.filter((r) => r.approx).length,
   };
 
@@ -414,7 +429,7 @@ export function summarise(rows: LeadSpeed[]): { team: TeamSummary; people: Perso
       picked_up: picked.length,
       not_picked_up: waiting.length,
       oldest_wait_min: waits.length ? Math.max(...waits) : null,
-      pickup: timeStats(picked.map((r) => r.pickup_min ?? NaN)),
+      pickup: timeStats(picked.filter((r) => !r.approx).map((r) => r.pickup_min ?? NaN)),
       avg_actions: mine.length ? Math.round((10 * mine.reduce((s, r) => s + r.handler_actions, 0)) / mine.length) / 10 : null,
       followed_up: mine.filter((r) => r.handler_actions >= 2).length,
       no_answer: mine.filter((r) => RANK[r.status] === -1).length,
@@ -423,13 +438,13 @@ export function summarise(rows: LeadSpeed[]): { team: TeamSummary; people: Perso
       disqualified: mine.filter((r) => RANK[r.status] === -2).length,
       avg_quality: q.length ? Math.round(q.reduce((s, x) => s + x, 0) / q.length) : null,
       routed: routedByMe.length,
-      routing: timeStats(routedByMe.map((r) => r.route_min ?? NaN)),
+      routing: timeStats(routedByMe.filter((r) => !r.approx).map((r) => r.route_min ?? NaN)),
       awaiting_route: holdingUnrouted.length,
       oldest_route_wait_min: holdingUnrouted.length
         ? Math.max(...holdingUnrouted.map((r) => r.wait_min ?? 0))
         : null,
       self_handled: self.length,
-      self_contact: timeStats(self.map((r) => r.total_min ?? NaN)),
+      self_contact: timeStats(self.filter((r) => !r.first_approx).map((r) => r.total_min ?? NaN)),
     };
   });
 
