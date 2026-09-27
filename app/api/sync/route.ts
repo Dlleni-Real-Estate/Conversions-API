@@ -135,7 +135,7 @@ export async function GET(req: NextRequest) {
       req.nextUrl.searchParams.get("crm") === "deep" ||
       new Date().getUTCMinutes() < 10 ||
       (assignmentsLogged ?? 0) === 0;
-    const crmBudget = deep ? 20_000 : 16_000;
+    const crmBudget = 16_000;
     const lookupBudget = 6_000;
     const crmCeiling = crmBudget + lookupBudget + 6_000;
     // The page reads and look-ups inside are bounded by their budgets; the
@@ -965,8 +965,6 @@ const CRM_PAGE = 250;
  * 10-20s on a bad afternoon, so the page is kept small.
  */
 const CRM_FAST_LENGTH = 120;
-/** Pages fetched side by side on a deep run. */
-const CRM_PARALLEL = 2;
 /** Phone look-ups per run for leads the pages did not find (returning people). */
 const CRM_LOOKUPS = 4;
 /** Note inserts per run — the mirror catches up over runs, never in one gulp. */
@@ -1212,42 +1210,53 @@ async function syncCrmStatuses(
         if (sample.length < 3) sample.push({ lead_id: leadId, owner, note: note ? note.body.slice(0, 60) : null });
   };
 
-  // v4 lists newest first, so the first pages are where new leads and first
-  // touches are. An ordinary run reads just those; a deep run keeps going,
-  // a few pages at a time, until it has read everything or the budget is out.
+  // v4 lists newest first, so the first page is where new leads and first
+  // touches are, and every run reads it. A deep run (hourly) also reads two
+  // more pages at a cursor that walks down the list and wraps, so older
+  // leads' stage moves are mirrored a slice at a time. Walking from the top
+  // for as long as the budget lasted made the hourly run the one that died:
+  // three pages at a time against an 8X that answers a page in 10-20s.
   let pagesRead = 0;
   let firstPageSpan: string | null = null;
+  let deepCursor: number | null = null;
   try {
-    const pageLen = opts.deep ? CRM_PAGE : CRM_FAST_LENGTH;
-    for (let start = 0; ; ) {
-      const want = opts.deep ? CRM_PARALLEL : 1 - pagesRead;
-      if (want <= 0) break;
-      const starts = Array.from({ length: want }, (_, i) => start + i * pageLen).filter(
-        (s) => total === 0 || s < total
-      );
-      if (starts.length === 0) break;
-      // Each read gets only what is left of the budget, so a slow 8X costs
-      // this step its budget and nothing more.
-      const left = Math.max(2_000, CRM_BUDGET_MS - (Date.now() - startedAt));
-      const pages = await Promise.all(starts.map((s) => crmPage(s, pageLen, left)));
-      let empty = false;
-      for (const page of pages) {
-        total = page.total;
-        if (page.rows.length === 0) { empty = true; continue; }
-        if (firstPageSpan === null) {
-          const f = page.rows[0], l = page.rows[page.rows.length - 1];
-          firstPageSpan = `created ${String(f.created_at ?? "?")} .. ${String(l.created_at ?? "?")}`;
-        }
-        scanned += page.rows.length;
-        for (const row of page.rows) handleRow(row);
+    const jobs: { start: number; len: number }[] = [{ start: 0, len: CRM_FAST_LENGTH }];
+    if (opts.deep) {
+      const { data: cur } = await db.from("app_settings").select("value").eq("key", "crm_deep_cursor").maybeSingle();
+      deepCursor = Number((cur?.value as { start?: number } | null)?.start) || CRM_FAST_LENGTH;
+      jobs.push({ start: deepCursor, len: CRM_PAGE }, { start: deepCursor + CRM_PAGE, len: CRM_PAGE });
+    }
+    // Each read gets only what is left of the budget, so a slow 8X costs
+    // this step its budget and nothing more. Settled one by one: a page that
+    // fails does not throw away the ones that arrived.
+    const left = Math.max(2_000, CRM_BUDGET_MS - (Date.now() - startedAt));
+    const results = await Promise.allSettled(jobs.map((j) => crmPage(j.start, j.len, left)));
+    results.forEach((r, i) => {
+      if (r.status === "rejected") {
+        console.error(`[sync] crm: page at ${jobs[i].start} failed — ${r.reason instanceof Error ? r.reason.message : String(r.reason)}`);
+        return;
       }
-      pagesRead += starts.length;
-      start += starts.length * pageLen;
-      if (empty || scanned >= total) break;
-      if (Date.now() - startedAt > CRM_BUDGET_MS) break;
+      const page = r.value;
+      pagesRead++;
+      total = page.total || total;
+      if (page.rows.length === 0) return;
+      if (i === 0) {
+        const f = page.rows[0], l = page.rows[page.rows.length - 1];
+        firstPageSpan = `created ${String(f.created_at ?? "?")} .. ${String(l.created_at ?? "?")}`;
+      }
+      scanned += page.rows.length;
+      for (const row of page.rows) handleRow(row);
+    });
+    if (deepCursor !== null && results.slice(1).some((r) => r.status === "fulfilled")) {
+      let next = deepCursor + 2 * CRM_PAGE;
+      if (total > 0 && next >= total) next = CRM_FAST_LENGTH;
+      await db.from("app_settings").upsert(
+        { key: "crm_deep_cursor", value: { start: next }, updated_at: new Date().toISOString() },
+        { onConflict: "key" }
+      );
     }
   } catch (err) {
-    console.error(`[sync] crm: page failed — ${err instanceof Error ? err.message : String(err)}`);
+    console.error(`[sync] crm: page read failed — ${err instanceof Error ? err.message : String(err)}`);
   }
 
   // Leads the pages did not find: look each one up by phone. This is where a
@@ -1371,7 +1380,7 @@ async function syncCrmStatuses(
     console.warn(`[sync] crm: unknown user id(s): ${unknownUsers.join(", ")} — likely suspended agents; add to CRM_USER_TO_NAME`);
   }
   console.log(
-    `[sync] crm: ${opts.deep ? "deep" : "fast"} pages=${pagesRead} scanned=${scanned}/${total} matched=${matched}` +
+    `[sync] crm: ${opts.deep ? `deep@${deepCursor}` : "fast"} pages=${pagesRead} scanned=${scanned}/${total} matched=${matched}` +
       (matchedByPhone ? ` (${matchedByPhone} by phone)` : "") +
       ` moved=${moves.length} owners=${owners} notes=${notesAdded}` +
       ` assignments+${assignmentsNew} activities+${activitiesNew} arrivals+${createdAt.length}` +
