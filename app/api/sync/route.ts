@@ -1087,15 +1087,28 @@ async function syncCrmStatuses(
   // the next run's log instead of staying invisible.
   let manualRowKeys: string | null = null;
 
-  const handleRow = (row: Record<string, unknown>) => {
+  /**
+   * `askedFor` is set when the row came back from a phone look-up for one
+   * particular lead. The record 8X returns is then the one it folded that
+   * lead's form into - but it carries the ORIGINAL form's leadgen_id, so left
+   * to itself the row would only ever update the original lead. Maged Hanna
+   * filled the ASL form on 26 Sep; 8X put it into his August record, and the
+   * look-up found that record and credited it to August.
+   */
+  const handleRow = (row: Record<string, unknown>, askedFor?: string) => {
         let leadId = row.leadgen_id ? String(row.leadgen_id) : null;
         let current = leadId ? mine.get(leadId) : undefined;
+        if (askedFor) {
+          if (leadId === askedFor) return;              // its own record: handled already
+          leadId = askedFor;
+          current = mine.get(askedFor);
+        }
 
         if (!row.leadgen_id && manualRowKeys === null) {
           manualRowKeys = Object.keys(row).slice(0, 40).join(",");
         }
 
-        if (current === undefined) {
+        if (current === undefined && !askedFor) {
           const hit = byPhone.get(normalizeEgyptPhone(pickPhone(row) ?? undefined) ?? "");
           if (hit) {
             leadId = hit.leadId;
@@ -1105,8 +1118,6 @@ async function syncCrmStatuses(
         }
 
         if (!leadId || current === undefined) return;  // not a lead this app tracks
-        matched++;
-        seenThisRun.add(leadId);
 
         const patch: Record<string, unknown> = {};
         const info = leadInfo.get(leadId);
@@ -1123,6 +1134,12 @@ async function syncCrmStatuses(
           !!rowCreatedAt && Number.isFinite(submitted) &&
           Date.parse(rowCreatedAt) < submitted - 24 * 3600_000 &&
           String(row.leadgen_id ?? "") !== leadId;
+        // A look-up hit that is not a returning record is some other person
+        // who happens to share digits with the search - never credit it.
+        if (askedFor && !returning && !(rowCreatedAt && Number.isFinite(submitted) &&
+            Math.abs(Date.parse(rowCreatedAt) - submitted) < 24 * 3600_000)) return;
+        matched++;
+        seenThisRun.add(leadId);
         if (returning && !info?.crm_returning_since) patch.crm_returning_since = rowCreatedAt;
 
         // Only what happened on or after this lead's arrival is about this lead.
@@ -1265,9 +1282,11 @@ async function syncCrmStatuses(
         lookedUp++;
         // Oldest first, so the most recent record is the one that sticks.
         rows.sort((a, b) => Date.parse(String(a.created_at ?? 0)) - Date.parse(String(b.created_at ?? 0)));
-        const before = seenThisRun.size;
-        for (const row of rows) handleRow(row);
-        if (seenThisRun.size > before) lookupHits++;
+        for (const row of rows) {
+          handleRow(row);                       // the lead it belongs to, if it is ours
+          handleRow(row, String(l.lead_id));    // and the lead we asked about
+        }
+        if (seenThisRun.has(String(l.lead_id))) lookupHits++;
       } catch (err) {
         console.warn(`[sync] crm: phone look-up failed - ${err instanceof Error ? err.message : String(err)}`);
         break;
