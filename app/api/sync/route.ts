@@ -1016,10 +1016,20 @@ async function syncCrmStatuses(
   }
   const CRM_BUDGET_MS = opts.budgetMs;
 
-  const { data: ours, error } = await db
+  // Accounts kept out of 8X entirely (ad_accounts.crm_sync = false). Their
+  // leads are worked in this app only, so the mirror must never touch them:
+  // a phone match against an unrelated 8X record would otherwise overwrite
+  // the stage the team set here and stamp an 8X agent as the owner.
+  const { data: noCrm } = await db.from("ad_accounts").select("ad_account_id").eq("crm_sync", false);
+  const crmExcluded = new Set((noCrm ?? []).map((a) => String(a.ad_account_id)));
+
+  const { data: allOurs, error } = await db
     .from("leads")
-    .select("lead_id,status,owner,phone,crm_created_at,submitted_at,crm_returning_since,crm_lookup_at,crm_pushed_at");
+    .select("lead_id,status,owner,phone,crm_created_at,submitted_at,crm_returning_since,crm_lookup_at,crm_pushed_at,ad_account_id");
   if (error) return skippedResult(error.message);
+  const ours = (allOurs ?? []).filter(
+    (l) => !crmExcluded.has(String((l as { ad_account_id?: string | null }).ad_account_id ?? ""))
+  );
   type Ours = {
     lead_id: string; phone: string | null; owner: string | null; submitted_at: string;
     crm_created_at: string | null; crm_returning_since: string | null; crm_lookup_at: string | null;
