@@ -56,6 +56,15 @@ final class Prefs {
         return signedIn(c) && available(c);
     }
 
+    /** The app's language, as chosen in the agent screens: "en" (default) or "ar". */
+    static String lang(Context c) {
+        return sp(c).getString("lang", "en");
+    }
+
+    static void setLang(Context c, String lang) {
+        sp(c).edit().putString("lang", "ar".equals(lang) ? "ar" : "en").apply();
+    }
+
     static String version(Context c) {
         try {
             return c.getPackageManager().getPackageInfo(c.getPackageName(), 0).versionName;

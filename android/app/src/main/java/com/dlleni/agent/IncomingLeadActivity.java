@@ -59,7 +59,7 @@ public class IncomingLeadActivity extends Activity {
     }
 
     private void render(Intent in) {
-        boolean ar = Alerts.arabic();
+        boolean ar = Alerts.arabic(this);
         leadId = in.getStringExtra("lead_id");
         phone = in.getStringExtra("phone");
         String name = in.getStringExtra("name");

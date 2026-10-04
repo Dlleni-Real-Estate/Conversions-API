@@ -204,8 +204,8 @@ public class WatchService extends Service {
         return sb.toString();
     }
 
-    private static boolean arabic() {
-        return Alerts.arabic();
+    private boolean arabic() {
+        return Alerts.arabic(this);
     }
 
     private String status(String problem, int waiting) {

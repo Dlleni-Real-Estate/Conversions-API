@@ -189,7 +189,7 @@ public class MainActivity extends Activity {
     }
 
     private View buildOffline() {
-        boolean ar = Alerts.arabic();
+        boolean ar = Alerts.arabic(MainActivity.this);
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
         col.setGravity(Gravity.CENTER);
@@ -465,10 +465,19 @@ public class MainActivity extends Activity {
             main.post(() -> MainActivity.this.fix(what == null ? "" : what));
         }
 
+        /** The agent switched language in the app: the ring and notifications follow. */
+        @JavascriptInterface
+        public void setLang(String lang) {
+            if (lang == null || lang.equals(Prefs.lang(MainActivity.this))) return;
+            Prefs.setLang(MainActivity.this, lang);
+            // Re-registering a channel renames it in the phone's settings.
+            main.post(() -> Alerts.ensureChannels(MainActivity.this));
+        }
+
         /** Five seconds to lock the phone, then a pretend lead rings. */
         @JavascriptInterface
         public void testRing() {
-            boolean ar = Alerts.arabic();
+            boolean ar = Alerts.arabic(MainActivity.this);
             main.postDelayed(() -> Alerts.ring(MainActivity.this, new Alerts.Lead("test",
                     ar ? "عميل تجريبي" : "Test customer", "201000000000",
                     ar ? "اختبار الرنة" : "Ring test",

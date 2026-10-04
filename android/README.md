@@ -28,6 +28,13 @@ ActionReceiver       "Later" on the ring
 Api, Prefs           HTTP and stored session
 ```
 
+## Language
+
+English by default, Arabic one tap away: the **ع / EN** button on the lead list, the
+login screen and Settings. The choice is passed to the native shell (`setLang`), so the
+ring, its notifications and the on-shift notice follow it too. Lead data (names, form
+answers) is never translated.
+
 ## Getting the APK
 
 Every push that touches `android/` runs `.github/workflows/android.yml`, which builds

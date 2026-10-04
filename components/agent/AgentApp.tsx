@@ -29,6 +29,8 @@ type NativeBridge = {
   status(): string;
   fix(what: string): void;
   testRing(): void;
+  /** Since app 1.0.2: the ring and notifications follow the app's language. */
+  setLang?(lang: string): void;
 };
 
 type NativeStatus = {
@@ -100,6 +102,8 @@ type View = "new" | "follow" | "all";
 const TOKEN_KEY = "dlleni_agent_token";
 const LANG_KEY = "dlleni_agent_lang";
 const CONTACT_KEY = /name|phone|email|whatsapp|رقم|الاسم|بريد|واتس/i;
+/** Arabic (or any right-to-left) script, to set a mixed row's direction. */
+const RTL_TEXT = /[֐-ࣿ]/;
 const LATER_STAGES: Status[] = ["meeting_booked", "meeting_done", "site_visit_booked", "site_visit_done", "eoi", "reservation"];
 
 // ── Small helpers ───────────────────────────────────────────────────────────
@@ -174,7 +178,7 @@ function WhatsIcon({ className = "h-5 w-5" }: { className?: string }) {
 // ── The app ─────────────────────────────────────────────────────────────────
 
 export default function AgentApp() {
-  const [lang, setLangState] = useState<AgentLang>("ar");
+  const [lang, setLangState] = useState<AgentLang>("en");
   const tx = AGENT_TEXT[lang];
   const [booted, setBooted] = useState(false);
   const [token, setToken] = useState<string>("");
@@ -198,8 +202,9 @@ export default function AgentApp() {
   const [native, setNative] = useState<NativeStatus | null>(null);
   const pendingCall = useRef<string | null>(null);
 
-  // Language: Arabic unless the agent chose otherwise. The whole document
-  // flips, so native widgets sit on the right side too.
+  // Language: English unless the agent chose Arabic in Settings. The whole
+  // document flips, so native widgets sit on the right side too, and the
+  // native shell is told so the ring and its notifications match.
   useEffect(() => {
     try {
       const saved = window.localStorage.getItem(LANG_KEY);
@@ -211,6 +216,9 @@ export default function AgentApp() {
   useEffect(() => {
     document.documentElement.lang = lang;
     document.documentElement.dir = lang === "ar" ? "rtl" : "ltr";
+    // Older app builds have no setLang; they simply stay in English.
+    const b = bridge();
+    if (b && typeof b.setLang === "function") b.setLang(lang);
   }, [lang]);
   const setLang = (l: AgentLang) => {
     setLangState(l);
@@ -474,6 +482,7 @@ export default function AgentApp() {
           onCall={(l) => startCall(l, "phone")}
           onAvailable={setAvailable}
           onSettings={() => setScreen("settings")}
+          onLang={setLang}
           onRefresh={loadList}
           setupIncomplete={!!setupIncomplete}
         />
@@ -659,7 +668,7 @@ function ShiftSwitch({ on, tx, onChange }: { on: boolean; tx: AgentText; onChang
   return (
     <button
       onClick={() => onChange(!on)}
-      className={`flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold shadow-card transition ${
+      className={`flex shrink-0 items-center gap-2 whitespace-nowrap rounded-full border px-3 py-1.5 text-xs font-semibold shadow-card transition ${
         on ? "border-emerald-300 bg-emerald-50 text-emerald-800" : "border-slate-300 bg-white text-slate-500"
       }`}
       aria-pressed={on}
@@ -692,6 +701,7 @@ function ListScreen({
   onCall,
   onAvailable,
   onSettings,
+  onLang,
   onRefresh,
   setupIncomplete,
 }: {
@@ -710,6 +720,7 @@ function ListScreen({
   onCall: (l: Lead) => void;
   onAvailable: (v: boolean) => void;
   onSettings: () => void;
+  onLang: (l: AgentLang) => void;
   onRefresh: () => void;
   setupIncomplete: boolean;
 }) {
@@ -732,6 +743,14 @@ function ListScreen({
           </div>
           <div className="flex items-center gap-2">
             <ShiftSwitch on={agent.available} tx={tx} onChange={onAvailable} />
+            {/* One tap to the other language, from the screen agents live on. */}
+            <button
+              onClick={() => onLang(lang === "ar" ? "en" : "ar")}
+              aria-label={tx.language}
+              className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-white text-sm font-bold text-slate-700 shadow-card"
+            >
+              {lang === "ar" ? "EN" : "ع"}
+            </button>
             <button
               onClick={onSettings}
               aria-label={tx.settings}
@@ -856,10 +875,16 @@ function LeadCard({
           </p>
           {preview.length > 0 && (
             <dl className="mt-2 space-y-1">
+              {/* The row takes the question's direction, so an Arabic question
+                  and its answer read in order inside an English card too. */}
               {preview.map((p) => (
-                <div key={p.q} className="text-[13px] leading-snug">
-                  <dt className="inline text-slate-500" dir="auto">{p.q}: </dt>
-                  <dd className="inline font-semibold text-slate-800" dir="auto">{p.a}</dd>
+                <div key={p.q} dir={RTL_TEXT.test(p.q) ? "rtl" : "ltr"} className="text-start text-[13px] leading-snug">
+                  <dt className="inline text-slate-500">
+                    <bdi>{p.q}</bdi>:{" "}
+                  </dt>
+                  <dd className="inline font-semibold text-slate-800">
+                    <bdi>{p.a}</bdi>
+                  </dd>
                 </div>
               ))}
             </dl>

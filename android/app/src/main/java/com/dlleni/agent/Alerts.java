@@ -64,8 +64,9 @@ final class Alerts {
         }
     }
 
-    static boolean arabic() {
-        return "ar".equals(java.util.Locale.getDefault().getLanguage());
+    /** Arabic only when the agent picked it in the app; English otherwise. */
+    static boolean arabic(Context c) {
+        return "ar".equals(Prefs.lang(c));
     }
 
     static void ensureChannels(Context c) {
@@ -75,8 +76,8 @@ final class Alerts {
         Uri ring = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE);
         if (ring == null) ring = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
         NotificationChannel leads = new NotificationChannel(
-                CH_RING, arabic() ? "ليد جديدة (رنة)" : "New lead (ringing)", NotificationManager.IMPORTANCE_HIGH);
-        leads.setDescription(arabic() ? "بترن زي المكالمة لما توصلك ليد" : "Rings like a call when a lead is handed to you");
+                CH_RING, arabic(c) ? "ليد جديدة (رنة)" : "New lead (ringing)", NotificationManager.IMPORTANCE_HIGH);
+        leads.setDescription(arabic(c) ? "بترن زي المكالمة لما توصلك ليد" : "Rings like a call when a lead is handed to you");
         leads.setSound(ring, new AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
@@ -89,12 +90,12 @@ final class Alerts {
         nm.createNotificationChannel(leads);
 
         NotificationChannel follow = new NotificationChannel(
-                CH_FOLLOW, arabic() ? "مواعيد المتابعة" : "Follow-ups", NotificationManager.IMPORTANCE_HIGH);
+                CH_FOLLOW, arabic(c) ? "مواعيد المتابعة" : "Follow-ups", NotificationManager.IMPORTANCE_HIGH);
         follow.enableVibration(true);
         nm.createNotificationChannel(follow);
 
         NotificationChannel shift = new NotificationChannel(
-                CH_SHIFT, arabic() ? "متاح لاستقبال الليدز" : "On shift", NotificationManager.IMPORTANCE_LOW);
+                CH_SHIFT, arabic(c) ? "متاح لاستقبال الليدز" : "On shift", NotificationManager.IMPORTANCE_LOW);
         shift.setShowBadge(false);
         shift.setSound(null, null);
         nm.createNotificationChannel(shift);
@@ -119,7 +120,7 @@ final class Alerts {
         ensureChannels(c);
         NotificationManager nm = c.getSystemService(NotificationManager.class);
         if (nm == null) return;
-        boolean ar = arabic();
+        boolean ar = arabic(c);
 
         Intent full = new Intent(c, IncomingLeadActivity.class)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_USER_ACTION)
@@ -163,7 +164,7 @@ final class Alerts {
     private static Notification build(Context c, Lead lead, String title, String text, PendingIntent fullPi,
                                       PendingIntent openPi, PendingIntent callPi, PendingIntent laterPi,
                                       boolean callStyle) {
-        boolean ar = arabic();
+        boolean ar = arabic(c);
         Notification.Builder b = new Notification.Builder(c, CH_RING)
                 .setSmallIcon(R.drawable.ic_stat_lead)
                 .setContentTitle(title)
@@ -207,7 +208,7 @@ final class Alerts {
         ensureChannels(c);
         NotificationManager nm = c.getSystemService(NotificationManager.class);
         if (nm == null) return;
-        boolean ar = arabic();
+        boolean ar = arabic(c);
         Lead lead = new Lead(leadId, name, phone, "", "");
         PendingIntent openPi = PendingIntent.getActivity(c, leadId.hashCode(), mainIntent(c, "open", lead), flags());
         PendingIntent callPi = PendingIntent.getActivity(c, leadId.hashCode() + 1, mainIntent(c, "call", lead), flags());
@@ -229,7 +230,7 @@ final class Alerts {
         Intent open = new Intent(c, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         return new Notification.Builder(c, CH_SHIFT)
                 .setSmallIcon(R.drawable.ic_stat_lead)
-                .setContentTitle(arabic() ? "دلني · متاح لاستقبال الليدز" : "Dlleni · on shift")
+                .setContentTitle(arabic(c) ? "دلني · متاح لاستقبال الليدز" : "Dlleni · on shift")
                 .setContentText(text)
                 .setOngoing(true)
                 .setShowWhen(false)
@@ -246,8 +247,8 @@ final class Alerts {
         nm.cancel(ID_RING);
         nm.notify(ID_SIGNED_OUT, new Notification.Builder(c, CH_FOLLOW)
                 .setSmallIcon(R.drawable.ic_stat_lead)
-                .setContentTitle(arabic() ? "اتعملك تسجيل خروج" : "You were signed out")
-                .setContentText(arabic() ? "ادخل تاني عشان توصلك الليدز" : "Sign in again to keep receiving leads")
+                .setContentTitle(arabic(c) ? "اتعملك تسجيل خروج" : "You were signed out")
+                .setContentText(arabic(c) ? "ادخل تاني عشان توصلك الليدز" : "Sign in again to keep receiving leads")
                 .setAutoCancel(true)
                 .setContentIntent(PendingIntent.getActivity(c, 2, open, flags()))
                 .build());
