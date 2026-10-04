@@ -93,6 +93,12 @@ alter table public.leads add column if not exists follow_up_at    timestamptz;
 alter table public.leads add column if not exists reassign_count  integer not null default 0;
 alter table public.leads add column if not exists tried_agent_ids uuid[] not null default '{}';
 
+-- A pretend lead, made to try the agent app end to end: it rings, it can be
+-- called and given a stage, and it has a timeline. It never reaches Meta, 8X,
+-- the dashboard's lists or any report, and is deleted after three days.
+alter table public.leads add column if not exists is_test boolean not null default false;
+create index if not exists leads_test_idx on public.leads (submitted_at) where is_test;
+
 create index if not exists leads_agent_idx on public.leads (agent_id, assigned_at desc) where agent_id is not null;
 create index if not exists leads_unrouted_idx on public.leads (campaign_id, submitted_at) where agent_id is null;
 create index if not exists leads_follow_up_idx on public.leads (agent_id, follow_up_at) where follow_up_at is not null;

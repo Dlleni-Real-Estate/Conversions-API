@@ -42,6 +42,7 @@ export async function GET(req: NextRequest) {
       "lead_id,full_name,campaign_id,campaign_name,adset_name,status,quality_score,owner,submitted_at,crm_created_at,crm_pushed_at,crm_returning_since"
     )
     .gte("submitted_at", since)
+    .eq("is_test", false)
     .order("submitted_at", { ascending: false })
     .limit(3000);
   if (scoped) q = q.eq("campaign_id", scoped);

@@ -89,6 +89,7 @@ export async function GET(req: NextRequest) {
       "lead_id,full_name,phone,email,status,status_at,owner,deal_value,quality_score,submitted_at," +
         "campaign_name,adset_name,ad_name,form_name,platform,raw_fields"
     )
+    .eq("is_test", false)
     .order("submitted_at", { ascending: false })
     .limit(5000);
 

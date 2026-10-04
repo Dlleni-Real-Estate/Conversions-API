@@ -33,6 +33,7 @@ export async function GET(req: NextRequest) {
   let q = db
     .from("leads")
     .select(LEAD_COLUMNS, { count: "exact" })
+    .eq("is_test", false)
     .order("submitted_at", { ascending: false })
     .limit(Number(p.get("limit") || 500));
 

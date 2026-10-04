@@ -2,25 +2,19 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 import { isAdmin, isAuthed } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
-import { AGENT_COLUMNS, MIN_PASSWORD, hashPassword, isOnline, normaliseUsername, type Agent } from "@/lib/agents";
+import {
+  AGENT_COLUMNS,
+  MIN_PASSWORD,
+  cairoMidnight,
+  hashPassword,
+  isOnline,
+  medianOf as median,
+  normaliseUsername,
+  type Agent,
+} from "@/lib/agents";
 import { rankOf, type Status } from "@/lib/stages";
 
 export const dynamic = "force-dynamic";
-
-const median = (xs: number[]) => {
-  if (xs.length === 0) return null;
-  const v = [...xs].sort((a, b) => a - b);
-  const m = Math.floor(v.length / 2);
-  return v.length % 2 ? v[m] : Math.round((v[m - 1] + v[m]) / 2);
-};
-
-/** Midnight in Cairo, where the team's "today" is. */
-function cairoMidnight(): number {
-  const now = new Date();
-  const ymd = new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Cairo" }).format(now);
-  const offset = Date.parse(now.toLocaleString("en-US", { timeZone: "Africa/Cairo" })) - Date.parse(now.toLocaleString("en-US", { timeZone: "UTC" }));
-  return Date.parse(`${ymd}T00:00:00Z`) - offset;
-}
 
 /**
  * GET -> every agent, with the numbers a manager looks at first: how many
@@ -38,6 +32,7 @@ export async function GET(req: NextRequest) {
     .from("leads")
     .select("agent_id,status,assigned_at,first_call_at")
     .not("agent_id", "is", null)
+    .eq("is_test", false)
     .gte("assigned_at", since)
     .limit(10000);
 

@@ -118,6 +118,22 @@ export async function touchPresence(db: DB, agent: Agent, appVersion?: string | 
     .eq("id", agent.id);
 }
 
+export function medianOf(xs: number[]): number | null {
+  if (xs.length === 0) return null;
+  const v = [...xs].sort((a, b) => a - b);
+  const m = Math.floor(v.length / 2);
+  return v.length % 2 ? v[m] : Math.round((v[m - 1] + v[m]) / 2);
+}
+
+/** Midnight in Cairo, where the team's "today" starts. */
+export function cairoMidnight(now = new Date()): number {
+  const ymd = new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Cairo" }).format(now);
+  const offset =
+    Date.parse(now.toLocaleString("en-US", { timeZone: "Africa/Cairo" })) -
+    Date.parse(now.toLocaleString("en-US", { timeZone: "UTC" }));
+  return Date.parse(`${ymd}T00:00:00Z`) - offset;
+}
+
 export function isOnline(lastSeen: string | null | undefined): boolean {
   return !!lastSeen && Date.now() - Date.parse(lastSeen) < ONLINE_WINDOW_MS;
 }

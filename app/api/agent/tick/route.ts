@@ -5,6 +5,7 @@ import { activeAccounts } from "@/lib/accounts";
 import { fetchAdLeads, fetchFormSchema, listCampaignAds, type AccountScope, type CampaignAd } from "@/lib/meta";
 import { leadRow } from "@/lib/ingest";
 import { reassignStale, routePending, routingRules } from "@/lib/routing";
+import { deleteTestLeads, TEST_LEAD_TTL_MS } from "@/lib/testLeads";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -34,8 +35,11 @@ export async function GET(req: NextRequest) {
   const left = () => BUDGET_MS - (Date.now() - started);
   const db = supabaseAdmin();
 
+  // Test leads clean themselves up (lib/testLeads.ts).
+  const testsDeleted = await deleteTestLeads(db, TEST_LEAD_TTL_MS);
+
   const rules = await routingRules(db);
-  if (rules.length === 0) return NextResponse.json({ ok: true, skipped: "no routed campaigns" });
+  if (rules.length === 0) return NextResponse.json({ ok: true, skipped: "no routed campaigns", testsDeleted });
 
   const { scopes } = await activeAccounts(db);
   const { data: formRows } = await db.from("lead_forms").select("form_id,name");

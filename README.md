@@ -122,6 +122,12 @@ negative like `NoAnswer`). Remove it from the funnel screen in Events Manager to
 Speed is measured on the agent's own phone: `assigned_at → first_call_at`, shown per agent as the
 median and the share called within 5 minutes.
 
+**Test leads.** To try the whole flow without a real customer, use *Send test lead* on an agent's
+card in the dashboard, or *Send me a test lead* in the app's Settings. A pretend lead, worded like a
+real form's answers, is handed to that agent and their phone rings within about 15 seconds. Test leads
+(`leads.is_test`) never reach Meta and never reach 8X. They never appear in the dashboard's lists,
+export, analytics or speed figures. They are deleted after 3 days, or at once with *Delete test leads*.
+
 **Scheduling.** Add the minute tick to pg_cron next to the sync:
 
 ```sql
@@ -309,6 +315,7 @@ android/                    the agent app's native shell, see android/README.md
 | `GET/POST /api/admin/agents` | list with speed stats · `{action: create|update|password|signout}` |
 | `GET/POST /api/admin/routing` | rules + campaign options · `{campaign_id, enabled, routes:[{agent_id, weight}], reassign_after_min?, backfill_hours?}` |
 | `POST /api/admin/assign` | `{lead_id, agent_id|null}` move one lead by hand |
+| `POST /api/admin/test-lead` | `{agent_id, count?}` send test leads · `{action: "clear"}` delete them |
 | `GET /api/agent/tick` | cron, every minute: pull routed campaigns, route, apply the speed rule |
 
 Everything above is behind `x-app-password` or `Authorization: Bearer $CRON_SECRET`.
@@ -322,3 +329,4 @@ The agent app's own endpoints take `x-agent-token` (issued by `POST /api/agent/l
 | `GET /api/agent/inbox` | what the phone polls: leads to ring for, follow-ups due |
 | `GET /api/agent/leads` | `?view=new|follow|all&q=`, the agent's own leads only |
 | `GET/POST /api/agent/leads/:id` | detail + timeline · `{action: open|call|outcome|note}` |
+| `POST /api/agent/test-lead` | a test lead for the signed-in agent (10 an hour) |

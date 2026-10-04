@@ -37,7 +37,7 @@ export type StageResult =
     };
 
 const LEAD_RETURN =
-  "lead_id, phone, email, deal_value, status, ad_account_id, submitted_at, status_at, raw_fields";
+  "lead_id, phone, email, deal_value, status, ad_account_id, submitted_at, status_at, raw_fields, is_test";
 
 export async function applyStageChange(db: DB, change: StageChange): Promise<StageResult> {
   const stage = STAGE_BY_STATUS[change.status];
@@ -76,6 +76,11 @@ export async function applyStageChange(db: DB, change: StageChange): Promise<Sta
   });
 
   const from = (before?.status as Status | undefined) ?? null;
+  // A test lead is pretend: telling Meta about it would train the campaign on
+  // a customer who does not exist.
+  if (lead.is_test) {
+    return { ok: true, lead, from, event: stage.event, events: [], capi: { skipped: "test lead" } };
+  }
   if (!stage.event) {
     return { ok: true, lead, from, event: null, events: [], capi: { skipped: "no event for this status" } };
   }

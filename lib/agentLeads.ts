@@ -12,7 +12,7 @@ type DB = ReturnType<typeof supabaseAdmin>;
 export const AGENT_LEAD_COLUMNS =
   "lead_id,full_name,phone,email,status,status_at,submitted_at,campaign_id,campaign_name,adset_name,ad_name," +
   "form_id,form_name,platform,raw_fields,notes,deal_value,agent_id,assigned_at,acked_at,first_call_at," +
-  "last_call_at,call_count,follow_up_at";
+  "last_call_at,call_count,follow_up_at,is_test";
 
 /** Stages after which nobody needs to be reminded to call again. */
 export const CLOSED_STATUSES = ["disqualified", "reservation"];

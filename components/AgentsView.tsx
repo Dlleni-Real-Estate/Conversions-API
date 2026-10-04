@@ -152,12 +152,22 @@ function AgentsCard({
       title={t.agTitle}
       subtitle={t.agSub}
       right={
-        <button
-          onClick={() => setOpen((v) => !v)}
-          className="tap shrink-0 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800"
-        >
-          + {t.agAdd}
-        </button>
+        <div className="flex shrink-0 flex-wrap justify-end gap-2">
+          <button
+            onClick={() => {
+              if (window.confirm(t.agClearTestsConfirm)) run(() => api("/api/admin/test-lead", { action: "clear" }), t.agClearedTests);
+            }}
+            className="tap rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
+          >
+            {t.agClearTests}
+          </button>
+          <button
+            onClick={() => setOpen((v) => !v)}
+            className="tap rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800"
+          >
+            + {t.agAdd}
+          </button>
+        </div>
       }
     >
       {open && (
@@ -262,6 +272,15 @@ function AgentsCard({
                 >
                   {t.agSignOut}
                 </button>
+                {a.active && (
+                  <button
+                    onClick={() => run(() => api("/api/admin/test-lead", { agent_id: a.id }), t.agTestSent)}
+                    title={t.agTestHint}
+                    className="tap rounded-lg border border-violet-300 bg-violet-50 px-2.5 font-medium text-violet-800 hover:bg-violet-100"
+                  >
+                    {t.agTestLead}
+                  </button>
+                )}
               </div>
             </li>
           ))}

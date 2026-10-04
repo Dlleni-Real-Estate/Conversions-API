@@ -579,6 +579,7 @@ async function pushLeadsToCrm(
     // A lead handed to an agent in this app is that agent's. Pushing it to 8X
     // as well puts a second person on the same phone call.
     .is("agent_id", null)
+    .eq("is_test", false)
     .not("phone", "is", null)
     .order("submitted_at", { ascending: true })
     .limit(limit + 1);
@@ -744,6 +745,8 @@ async function sendMissingStageEvents(
     .from("leads")
     .select("lead_id, phone, email, status, deal_value, ad_account_id, quality_score, submitted_at, status_at, raw_fields")
     .gte("submitted_at", sevenDaysAgo)
+    // Test leads are pretend customers; Meta must never hear of them.
+    .eq("is_test", false)
     .order("submitted_at", { ascending: false })
     .limit(limit);
 
@@ -1023,11 +1026,12 @@ async function syncCrmStatuses(
 
   const { data: allOurs, error } = await db
     .from("leads")
-    .select("lead_id,status,owner,phone,crm_created_at,submitted_at,crm_returning_since,crm_lookup_at,crm_pushed_at,ad_account_id,agent_id");
+    .select("lead_id,status,owner,phone,crm_created_at,submitted_at,crm_returning_since,crm_lookup_at,crm_pushed_at,ad_account_id,agent_id")
+    .eq("is_test", false);
   if (error) return skippedResult(error.message);
   // The same goes for a single lead handed to an agent in the agent app: its
   // stage is what that agent picked after the call, and 8X must not overwrite
-  // it. To the mirror, neither kind of lead exists.
+  // it. To the mirror, neither kind of lead exists (nor do test leads).
   const ours = (allOurs ?? []).filter((l) => {
     const row = l as { ad_account_id?: string | null; agent_id?: string | null };
     return !crmExcluded.has(String(row.ad_account_id ?? "")) && !row.agent_id;

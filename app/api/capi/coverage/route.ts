@@ -33,7 +33,7 @@ export async function GET(req: NextRequest) {
   const campaign = req.nextUrl.searchParams.get("campaign");
   const scoped = campaign && campaign !== "all" ? campaign : null;
 
-  let q = db.from("leads").select("lead_id,status,campaign_name,submitted_at").limit(2000);
+  let q = db.from("leads").select("lead_id,status,campaign_name,submitted_at").eq("is_test", false).limit(2000);
   if (scoped) q = q.eq("campaign_id", scoped);
   const { data: leadRows, error } = await q;
   if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });

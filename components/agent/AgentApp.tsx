@@ -4,6 +4,36 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { STAGE_BY_STATUS, type Status } from "@/lib/stages";
 import { answerLabel, questionLabel, type FormDictionary } from "@/lib/labels";
 import { AGENT_TEXT, type AgentLang, type AgentText } from "@/lib/agentText";
+import {
+  IconArrows,
+  IconBattery,
+  IconBell,
+  IconCalendarCheck,
+  IconCheck,
+  IconChevron,
+  IconChevronEnd,
+  IconClock,
+  IconFlask,
+  IconGear,
+  IconInbox,
+  IconLanguages,
+  IconList,
+  IconLogOut,
+  IconMaximize,
+  IconNote,
+  IconPhone,
+  IconPhoneFilled,
+  IconPhoneMissed,
+  IconPhoneOff,
+  IconRefresh,
+  IconRepeat,
+  IconSearch,
+  IconSend,
+  IconStar,
+  IconUserX,
+  IconWhatsApp,
+  IconZap,
+} from "./icons";
 
 /**
  * The agent app: the screens an agent lives in all day.
@@ -14,6 +44,12 @@ import { AGENT_TEXT, type AgentLang, type AgentText } from "@/lib/agentText";
  * directly. In a plain phone browser it works the same minus the ringing.
  * Everything native goes through `window.DlleniApp`; when that is missing the
  * page falls back to plain links.
+ *
+ * Design: Apple's app language. Content sits on opaque grouped cards; only the
+ * floating chrome (top bar, tab bar, call bar) is glass. One indigo tint does
+ * the interactive work and green means "call". Three loud moments, everything
+ * else quiet: the "today" card, the waiting ring on a new lead, and the
+ * result sheet's confirmation.
  */
 
 // ── Native bridge ───────────────────────────────────────────────────────────
@@ -85,6 +121,7 @@ type Lead = {
   call_count: number | null;
   follow_up_at: string | null;
   notes: string | null;
+  is_test?: boolean;
 };
 
 type Note = {
@@ -98,6 +135,7 @@ type Note = {
 };
 
 type View = "new" | "follow" | "all";
+type Today = { assigned: number; called: number; median_call_min: number | null };
 
 const TOKEN_KEY = "dlleni_agent_token";
 const LANG_KEY = "dlleni_agent_lang";
@@ -136,6 +174,7 @@ function when(iso: string | null | undefined, lang: AgentLang): string {
 
 const initials = (name: string | null) =>
   (name || "?")
+    .replace(/^TEST\s*·\s*/, "")
     .trim()
     .split(/\s+/)
     .slice(0, 2)
@@ -145,33 +184,105 @@ const initials = (name: string | null) =>
 
 const prettyPhone = (p: string | null) => (p ? `+${p}` : "");
 
+/** The name as shown: a test lead's "TEST ·" lives in its chip, not its name. */
+const shownName = (l: { full_name: string | null }, tx: AgentText) =>
+  (l.full_name || "").replace(/^TEST\s*·\s*/, "") || tx.unnamed;
+
 function stageName(status: Status, lang: AgentLang) {
   const s = STAGE_BY_STATUS[status];
   return s ? (lang === "ar" ? s.labelAr : s.label) : status;
 }
 
-function StageChip({ status, lang, className = "" }: { status: Status; lang: AgentLang; className?: string }) {
+/** A stable gradient per person, so the same customer always looks the same. */
+const AVATAR_GRADIENTS = [
+  "from-indigo-500 to-violet-500",
+  "from-sky-500 to-indigo-500",
+  "from-emerald-500 to-teal-500",
+  "from-amber-500 to-orange-500",
+  "from-rose-500 to-pink-500",
+  "from-fuchsia-500 to-purple-500",
+  "from-cyan-500 to-sky-500",
+];
+function gradientFor(seed: string) {
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
+  return AVATAR_GRADIENTS[h % AVATAR_GRADIENTS.length];
+}
+
+/** How urgent a waiting lead is: green under 5 minutes, amber under 15, then red. */
+function urgency(minutes: number): { color: string; tone: string } {
+  if (minutes < 5) return { color: "#34C759", tone: "text-emerald-600" };
+  if (minutes < 15) return { color: "#FF9500", tone: "text-amber-600" };
+  return { color: "#FF3B30", tone: "text-red-600" };
+}
+
+function Avatar({
+  name,
+  seed,
+  size = 48,
+  waitingMin,
+}: {
+  name: string | null;
+  seed: string;
+  size?: number;
+  waitingMin?: number | null;
+}) {
+  const ring = waitingMin !== null && waitingMin !== undefined ? urgency(waitingMin) : null;
+  const r = size / 2 + 4;
+  const c = 2 * Math.PI * r;
+  const progress = ring ? Math.min(1, (waitingMin as number) / 15) : 0;
+  return (
+    <div className="relative shrink-0" style={{ width: size + 12, height: size + 12 }}>
+      {ring && (
+        <>
+          <span
+            className="agent-ping absolute rounded-full"
+            style={{ inset: 6, background: ring.color, opacity: 0.35 }}
+            aria-hidden
+          />
+          <svg className="absolute inset-0 -rotate-90" viewBox={`0 0 ${size + 12} ${size + 12}`} aria-hidden>
+            <circle cx={(size + 12) / 2} cy={(size + 12) / 2} r={r} fill="none" stroke="rgba(120,120,128,0.16)" strokeWidth="3" />
+            <circle
+              cx={(size + 12) / 2}
+              cy={(size + 12) / 2}
+              r={r}
+              fill="none"
+              stroke={ring.color}
+              strokeWidth="3"
+              strokeLinecap="round"
+              strokeDasharray={c}
+              strokeDashoffset={c * (1 - Math.max(0.06, progress))}
+              style={{ transition: "stroke-dashoffset 600ms var(--ease), stroke 600ms var(--ease)" }}
+            />
+          </svg>
+        </>
+      )}
+      <div
+        className={`absolute flex items-center justify-center rounded-full bg-gradient-to-br font-semibold text-white ${gradientFor(seed)}`}
+        style={{ inset: 6, fontSize: size * 0.36 }}
+      >
+        {initials(name)}
+      </div>
+    </div>
+  );
+}
+
+function StageChip({ status, lang }: { status: Status; lang: AgentLang }) {
   const s = STAGE_BY_STATUS[status];
   return (
-    <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-semibold ${s?.color ?? ""} ${className}`}>
+    <span className="inline-flex items-center gap-1.5 rounded-full bg-[var(--fill-3)] px-2.5 py-1 text-[12px] font-semibold text-[var(--label)]">
+      <span className="h-2 w-2 rounded-full" style={{ background: s?.accent }} aria-hidden />
       {stageName(status, lang)}
     </span>
   );
 }
 
-function PhoneIcon({ className = "h-5 w-5" }: { className?: string }) {
+function TestChip({ tx }: { tx: AgentText }) {
   return (
-    <svg viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden>
-      <path d="M6.62 10.79a15.05 15.05 0 006.59 6.59l2.2-2.2a1 1 0 011.02-.24 11.36 11.36 0 003.57.57 1 1 0 011 1V20a1 1 0 01-1 1A17 17 0 013 4a1 1 0 011-1h3.5a1 1 0 011 1c0 1.25.2 2.45.57 3.57a1 1 0 01-.25 1.02l-2.2 2.2z" />
-    </svg>
-  );
-}
-
-function WhatsIcon({ className = "h-5 w-5" }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden>
-      <path d="M12.04 2a9.9 9.9 0 00-8.5 15l-1.4 5 5.1-1.34A9.9 9.9 0 1012.04 2zm5.8 14.06c-.24.68-1.42 1.3-1.96 1.35-.5.05-1.13.07-1.83-.11a16.6 16.6 0 01-1.66-.61 13 13 0 01-5-4.42 5.7 5.7 0 01-1.2-3.03 3.3 3.3 0 011.03-2.45 1.08 1.08 0 01.78-.37h.56c.18 0 .42-.07.66.5.24.6.83 2.05.9 2.2.07.14.12.31.02.5-.1.2-.14.31-.29.48l-.43.5c-.14.15-.29.3-.12.6a8.9 8.9 0 001.65 2.05 8.1 8.1 0 002.38 1.47c.3.15.47.12.65-.07.17-.2.75-.87.95-1.17.2-.3.4-.25.66-.15.27.1 1.72.81 2.02.96.3.15.49.22.56.34.07.12.07.7-.17 1.38z" />
-    </svg>
+    <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-amber-800">
+      <IconFlask className="h-3 w-3" strokeWidth={2.5} />
+      {tx.testChip}
+    </span>
   );
 }
 
@@ -189,6 +300,7 @@ export default function AgentApp() {
   const [search, setSearch] = useState("");
   const [leads, setLeads] = useState<Lead[]>([]);
   const [counts, setCounts] = useState({ new: 0, follow_due: 0, all: 0 });
+  const [today, setToday] = useState<Today | null>(null);
   const [dict, setDict] = useState<FormDictionary | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -202,9 +314,9 @@ export default function AgentApp() {
   const [native, setNative] = useState<NativeStatus | null>(null);
   const pendingCall = useRef<string | null>(null);
 
-  // Language: English unless the agent chose Arabic in Settings. The whole
-  // document flips, so native widgets sit on the right side too, and the
-  // native shell is told so the ring and its notifications match.
+  // Language: English unless the agent chose Arabic. The whole document
+  // flips, so native widgets sit on the right side too, and the native shell
+  // is told so the ring and its notifications match.
   useEffect(() => {
     try {
       const saved = window.localStorage.getItem(LANG_KEY);
@@ -231,7 +343,7 @@ export default function AgentApp() {
 
   const flash = (m: string) => {
     setToast(m);
-    setTimeout(() => setToast(null), 2200);
+    setTimeout(() => setToast(null), 2600);
   };
 
   const signOutLocal = useCallback(() => {
@@ -314,6 +426,7 @@ export default function AgentApp() {
       const j = await api(`/api/agent/leads?${qs}`);
       setLeads(j.leads || []);
       setCounts(j.counts || { new: 0, follow_due: 0, all: 0 });
+      setToday(j.today || null);
       setDict(j.dictionary || null);
       if (j.agent) setAgent(j.agent);
     } catch (e) {
@@ -439,6 +552,21 @@ export default function AgentApp() {
     }
   };
 
+  const sendTestLead = async () => {
+    try {
+      await api("/api/agent/test-lead", {});
+      flash(tx.testLeadSent);
+      // In a browser nothing rings: show it in the list instead.
+      if (!bridge()) {
+        setView("new");
+        setScreen("list");
+        setTimeout(loadList, 400);
+      }
+    } catch (e) {
+      flash((e as Error).message === "too_many_tests" ? tx.tooManyTests : tx.network);
+    }
+  };
+
   if (!booted) return <Splash />;
   if (!token || !agent) {
     return (
@@ -461,18 +589,18 @@ export default function AgentApp() {
     );
   }
 
-  const setupIncomplete = native && (!native.notifications || native.fullScreen === false || !native.battery);
+  const setupIncomplete = !!native && (!native.notifications || native.fullScreen === false || !native.battery);
 
   return (
-    <div className="min-h-screen bg-slate-100 pb-10 text-slate-900">
+    <div className="agent-app min-h-screen">
       {screen === "list" && (
         <ListScreen
           tx={tx}
           lang={lang}
           agent={agent}
           view={view}
-          onView={setView}
           counts={counts}
+          today={today}
           leads={leads}
           dict={dict}
           loading={loading}
@@ -481,10 +609,10 @@ export default function AgentApp() {
           onOpen={(id) => openLead(id)}
           onCall={(l) => startCall(l, "phone")}
           onAvailable={setAvailable}
-          onSettings={() => setScreen("settings")}
           onLang={setLang}
+          onSetup={() => setScreen("settings")}
           onRefresh={loadList}
-          setupIncomplete={!!setupIncomplete}
+          setupIncomplete={setupIncomplete}
         />
       )}
 
@@ -518,12 +646,27 @@ export default function AgentApp() {
           agent={agent}
           native={native}
           onLang={setLang}
-          onBack={() => setScreen("list")}
           onAvailable={setAvailable}
           onRefreshNative={() => setNative(nativeStatus())}
+          onTestLead={sendTestLead}
           onLogout={async () => {
             await api("/api/agent/logout", {}).catch(() => {});
             signOutLocal();
+          }}
+        />
+      )}
+
+      {screen !== "lead" && (
+        <TabBar
+          tx={tx}
+          active={screen === "settings" ? "settings" : view}
+          counts={counts}
+          onPick={(t) => {
+            if (t === "settings") setScreen("settings");
+            else {
+              setView(t);
+              setScreen("list");
+            }
           }}
         />
       )}
@@ -536,8 +679,9 @@ export default function AgentApp() {
           onClose={() => setSheetFor(null)}
           onSave={async (payload) => {
             await api(`/api/agent/leads/${encodeURIComponent(sheetFor.lead_id)}`, { action: "outcome", ...payload });
+          }}
+          onDone={() => {
             setSheetFor(null);
-            flash(tx.saved);
             // Next lead: back to the list, where the next one is waiting.
             setScreen("list");
             loadList();
@@ -546,31 +690,118 @@ export default function AgentApp() {
       )}
 
       {toast && (
-        <div className="pointer-events-none fixed inset-x-0 bottom-6 z-[60] flex justify-center px-4">
-          <div className="rounded-full bg-slate-900 px-5 py-2.5 text-sm font-medium text-white shadow-lg">{toast}</div>
+        <div className="pointer-events-none fixed inset-x-0 top-4 z-[70] flex justify-center px-4">
+          <div className="agent-glass agent-rise flex max-w-sm items-center gap-2 rounded-full px-4 py-2.5 text-[14px] font-medium">
+            <IconBell className="h-4 w-4 shrink-0 text-[var(--tint)]" />
+            <span>{toast}</span>
+          </div>
         </div>
       )}
     </div>
   );
 }
 
-// ── Screens ─────────────────────────────────────────────────────────────────
+// ── Chrome ──────────────────────────────────────────────────────────────────
 
 function Splash() {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-white">
-      <div className="h-10 w-10 animate-spin rounded-full border-4 border-brand-200 border-t-brand-600" />
+    <div className="agent-app flex min-h-screen items-center justify-center">
+      <Logo />
     </div>
   );
 }
 
-function Logo({ size = "h-14 w-14 text-2xl" }: { size?: string }) {
+function Logo({ size = 64 }: { size?: number }) {
   return (
-    <div className={`flex ${size} items-center justify-center rounded-2xl bg-gradient-to-br from-brand-600 to-emerald-500 font-bold text-white shadow-raised`}>
-      د
+    <div
+      className="agent-mesh flex items-center justify-center text-white shadow-[0_10px_30px_rgba(79,70,229,0.35)]"
+      style={{ width: size, height: size, borderRadius: size * 0.28 }}
+    >
+      <IconPhoneFilled className="h-1/2 w-1/2" />
     </div>
   );
 }
+
+function LangToggle({ lang, onLang }: { lang: AgentLang; onLang: (l: AgentLang) => void }) {
+  return (
+    <div className="inline-flex rounded-full bg-[var(--fill-3)] p-0.5 text-[13px] font-semibold">
+      {(["en", "ar"] as const).map((l) => (
+        <button
+          key={l}
+          onClick={() => onLang(l)}
+          className={`agent-press rounded-full px-3.5 py-1.5 ${lang === l ? "bg-white text-[var(--label)] shadow-[var(--shadow-1)]" : "text-[var(--label-2)]"}`}
+        >
+          {l === "ar" ? "العربية" : "English"}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** iOS switch, on = green. */
+function Switch({ on, onChange, label }: { on: boolean; onChange: (v: boolean) => void; label: string }) {
+  return (
+    <button
+      role="switch"
+      aria-checked={on}
+      aria-label={label}
+      onClick={() => onChange(!on)}
+      className={`relative h-[31px] w-[51px] shrink-0 rounded-full transition-colors duration-300 ${on ? "bg-[var(--call)]" : "bg-[var(--fill)]"}`}
+    >
+      <span
+        className="absolute top-[2px] h-[27px] w-[27px] rounded-full bg-white shadow-[0_3px_8px_rgba(0,0,0,0.15)] transition-all duration-300"
+        style={{ insetInlineStart: on ? 22 : 2, transitionTimingFunction: "var(--ease)" }}
+      />
+    </button>
+  );
+}
+
+function TabBar({
+  tx,
+  active,
+  counts,
+  onPick,
+}: {
+  tx: AgentText;
+  active: View | "settings";
+  counts: { new: number; follow_due: number };
+  onPick: (t: View | "settings") => void;
+}) {
+  const items: { id: View | "settings"; label: string; icon: React.ReactNode; badge?: number }[] = [
+    { id: "new", label: tx.tabNew, icon: <IconInbox className="h-[22px] w-[22px]" />, badge: counts.new },
+    { id: "follow", label: tx.tabFollow, icon: <IconRepeat className="h-[22px] w-[22px]" />, badge: counts.follow_due },
+    { id: "all", label: tx.tabAll, icon: <IconList className="h-[22px] w-[22px]" /> },
+    { id: "settings", label: tx.settings, icon: <IconGear className="h-[22px] w-[22px]" /> },
+  ];
+  return (
+    <nav className="fixed inset-x-0 bottom-0 z-40 px-4 pb-[max(14px,env(safe-area-inset-bottom))]">
+      <div className="agent-glass mx-auto flex max-w-md items-stretch justify-between rounded-full p-1.5">
+        {items.map((it) => {
+          const on = active === it.id;
+          return (
+            <button
+              key={it.id}
+              onClick={() => onPick(it.id)}
+              className={`agent-press relative flex flex-1 flex-col items-center gap-0.5 rounded-full px-1 py-1.5 text-[10.5px] font-semibold ${
+                on ? "bg-[var(--fill-3)] text-[var(--tint)]" : "text-[var(--label-2)]"
+              }`}
+            >
+              {it.icon}
+              <span className="truncate">{it.label}</span>
+              {!!it.badge && it.badge > 0 && (
+                <span className="absolute top-0.5 min-w-[18px] translate-x-[14px] rounded-full bg-[#FF3B30] px-1 text-[10px] font-bold leading-[18px] text-white rtl:-translate-x-[14px]">
+                  {it.badge > 99 ? "99+" : it.badge}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </nav>
+  );
+}
+
+// ── Login ───────────────────────────────────────────────────────────────────
 
 function Login({
   tx,
@@ -609,36 +840,48 @@ function Login({
   };
 
   return (
-    <main className="flex min-h-screen flex-col bg-gradient-to-b from-brand-50 via-white to-white px-6 pb-10 pt-16">
-      <div className="flex justify-end">
-        <LangToggle lang={lang} onLang={onLang} />
-      </div>
-      <div className="mx-auto mt-6 w-full max-w-sm">
-        <Logo />
-        <h1 className="mt-6 text-2xl font-bold tracking-tight">{tx.appName}</h1>
-        <p className="mt-1 text-sm text-slate-500">{tx.signInSub}</p>
-        <form onSubmit={submit} className="mt-8 space-y-3">
-          <input
-            value={u}
-            onChange={(e) => setU(e.target.value.replace(/\s/g, ""))}
-            placeholder={tx.username}
-            autoCapitalize="none"
-            autoCorrect="off"
-            dir="ltr"
-            className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3.5 text-base shadow-card outline-none focus:border-brand-500"
-          />
-          <input
-            value={p}
-            onChange={(e) => setP(e.target.value)}
-            placeholder={tx.password}
-            type="password"
-            dir="ltr"
-            className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3.5 text-base shadow-card outline-none focus:border-brand-500"
-          />
-          {err && <p className="text-sm font-medium text-red-600">{err}</p>}
+    <main className="agent-app relative min-h-screen overflow-hidden">
+      <div className="agent-mesh absolute inset-x-0 top-0 h-[46vh] rounded-b-[40px]" aria-hidden />
+      <div className="relative mx-auto flex min-h-screen max-w-md flex-col px-5 pb-10 pt-6">
+        <div className="flex justify-end">
+          <div className="rounded-full bg-white/20 p-0.5 backdrop-blur">
+            <LangToggle lang={lang} onLang={onLang} />
+          </div>
+        </div>
+        <div className="agent-rise mt-10 text-center text-white">
+          <div className="mx-auto w-fit rounded-[22px] bg-white/15 p-1.5 backdrop-blur">
+            <Logo size={72} />
+          </div>
+          <h1 className="mt-5 text-[32px] font-bold leading-tight tracking-[-0.02em]">{tx.appName}</h1>
+          <p className="mt-1 text-[15px] text-white/80">{tx.signInSub}</p>
+        </div>
+
+        <form onSubmit={submit} className="agent-rise mt-8 rounded-[28px] bg-white p-4 shadow-[var(--shadow-3)]" style={{ animationDelay: "80ms" }}>
+          <div className="overflow-hidden rounded-[18px] bg-[var(--fill-3)]">
+            <input
+              value={u}
+              onChange={(e) => setU(e.target.value.replace(/\s/g, ""))}
+              placeholder={tx.username}
+              autoCapitalize="none"
+              autoCorrect="off"
+              autoComplete="username"
+              dir="ltr"
+              className="agent-hairline w-full bg-transparent px-4 py-4 text-[17px] outline-none placeholder:text-[var(--label-3)]"
+            />
+            <input
+              value={p}
+              onChange={(e) => setP(e.target.value)}
+              placeholder={tx.password}
+              type="password"
+              autoComplete="current-password"
+              dir="ltr"
+              className="w-full bg-transparent px-4 py-4 text-[17px] outline-none placeholder:text-[var(--label-3)]"
+            />
+          </div>
+          {err && <p className="mt-3 text-center text-[14px] font-medium text-[#FF3B30]">{err}</p>}
           <button
             disabled={busy || !u || !p}
-            className="w-full rounded-2xl bg-brand-600 py-3.5 text-base font-semibold text-white shadow-raised active:scale-[0.99] disabled:opacity-50"
+            className="agent-press mt-4 w-full rounded-full bg-[var(--tint)] py-4 text-[17px] font-semibold text-white shadow-[0_8px_20px_rgba(79,70,229,0.35)] disabled:opacity-40"
           >
             {busy ? tx.signingIn : tx.signIn}
           </button>
@@ -648,50 +891,15 @@ function Login({
   );
 }
 
-function LangToggle({ lang, onLang }: { lang: AgentLang; onLang: (l: AgentLang) => void }) {
-  return (
-    <div className="inline-flex overflow-hidden rounded-full border border-slate-200 bg-white text-xs font-semibold shadow-card">
-      {(["ar", "en"] as const).map((l) => (
-        <button
-          key={l}
-          onClick={() => onLang(l)}
-          className={`px-3 py-1.5 ${lang === l ? "bg-slate-900 text-white" : "text-slate-600"}`}
-        >
-          {l === "ar" ? "ع" : "EN"}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function ShiftSwitch({ on, tx, onChange }: { on: boolean; tx: AgentText; onChange: (v: boolean) => void }) {
-  return (
-    <button
-      onClick={() => onChange(!on)}
-      className={`flex shrink-0 items-center gap-2 whitespace-nowrap rounded-full border px-3 py-1.5 text-xs font-semibold shadow-card transition ${
-        on ? "border-emerald-300 bg-emerald-50 text-emerald-800" : "border-slate-300 bg-white text-slate-500"
-      }`}
-      aria-pressed={on}
-    >
-      <span className={`relative h-4 w-7 rounded-full transition ${on ? "bg-emerald-500" : "bg-slate-300"}`}>
-        <span
-          className={`absolute top-0.5 h-3 w-3 rounded-full bg-white shadow transition-all ${
-            on ? "start-[0.875rem]" : "start-0.5"
-          }`}
-        />
-      </span>
-      {on ? tx.onShift : tx.offShift}
-    </button>
-  );
-}
+// ── Lead list ───────────────────────────────────────────────────────────────
 
 function ListScreen({
   tx,
   lang,
   agent,
   view,
-  onView,
   counts,
+  today,
   leads,
   dict,
   loading,
@@ -700,8 +908,8 @@ function ListScreen({
   onOpen,
   onCall,
   onAvailable,
-  onSettings,
   onLang,
+  onSetup,
   onRefresh,
   setupIncomplete,
 }: {
@@ -709,8 +917,8 @@ function ListScreen({
   lang: AgentLang;
   agent: Agent;
   view: View;
-  onView: (v: View) => void;
   counts: { new: number; follow_due: number; all: number };
+  today: Today | null;
   leads: Lead[];
   dict: FormDictionary | null;
   loading: boolean;
@@ -719,116 +927,138 @@ function ListScreen({
   onOpen: (id: string) => void;
   onCall: (l: Lead) => void;
   onAvailable: (v: boolean) => void;
-  onSettings: () => void;
   onLang: (l: AgentLang) => void;
+  onSetup: () => void;
   onRefresh: () => void;
   setupIncomplete: boolean;
 }) {
-  const tabs: { id: View; label: string; badge: number; tone: string }[] = [
-    { id: "new", label: tx.tabNew, badge: counts.new, tone: "bg-red-500" },
-    { id: "follow", label: tx.tabFollow, badge: counts.follow_due, tone: "bg-amber-500" },
-    { id: "all", label: tx.tabAll, badge: 0, tone: "" },
-  ];
+  // Re-render every 30s so waiting times and rings move on their own.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick((n) => n + 1), 30_000);
+    return () => clearInterval(id);
+  }, []);
+
+  const hour = new Date().getHours();
+  const title = view === "new" ? tx.titleNew : view === "follow" ? tx.titleFollow : tx.titleAll;
 
   return (
     <>
-      <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 px-4 pb-3 pt-4 backdrop-blur">
-        <div className="mx-auto flex max-w-xl items-center justify-between gap-3">
-          <div className="flex min-w-0 items-center gap-3">
-            <Logo size="h-10 w-10 text-lg" />
-            <div className="min-w-0">
-              <p className="text-xs text-slate-500">{tx.hello}</p>
-              <h1 dir="auto" className="truncate text-base font-bold">{agent.name}</h1>
+      <header className="sticky top-0 z-30 px-4 pt-3">
+        <div className="agent-glass mx-auto flex max-w-md items-center justify-between gap-2 rounded-full py-1.5 pe-1.5 ps-3">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <Logo size={32} />
+            <div className="min-w-0 leading-tight">
+              <p className="text-[11px] text-[var(--label-2)]">{hour < 12 ? tx.goodMorning : tx.goodEvening}</p>
+              <p dir="auto" className="truncate text-[15px] font-semibold">{agent.name}</p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <ShiftSwitch on={agent.available} tx={tx} onChange={onAvailable} />
-            {/* One tap to the other language, from the screen agents live on. */}
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={() => onAvailable(!agent.available)}
+              className={`agent-press flex items-center gap-1.5 whitespace-nowrap rounded-full px-3 py-2 text-[13px] font-semibold ${
+                agent.available ? "bg-[#34C759]/15 text-[#248A3D]" : "bg-[var(--fill-3)] text-[var(--label-2)]"
+              }`}
+              aria-pressed={agent.available}
+            >
+              <span className="relative flex h-2 w-2">
+                {agent.available && <span className="agent-ping absolute inset-0 rounded-full bg-[#34C759]" />}
+                <span className={`relative h-2 w-2 rounded-full ${agent.available ? "bg-[#34C759]" : "bg-[var(--label-3)]"}`} />
+              </span>
+              {agent.available ? tx.onShift : tx.offShift}
+            </button>
             <button
               onClick={() => onLang(lang === "ar" ? "en" : "ar")}
               aria-label={tx.language}
-              className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-white text-sm font-bold text-slate-700 shadow-card"
+              className="agent-press flex h-9 w-9 items-center justify-center rounded-full bg-[var(--fill-3)] text-[13px] font-bold"
             >
               {lang === "ar" ? "EN" : "ع"}
             </button>
-            <button
-              onClick={onSettings}
-              aria-label={tx.settings}
-              className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 shadow-card"
-            >
-              <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
-                <circle cx="12" cy="12" r="3" />
-                <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06A1.65 1.65 0 004.6 15a1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06A1.65 1.65 0 009 4.6a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z" />
-              </svg>
-            </button>
           </div>
-        </div>
-
-        <div className="mx-auto mt-3 grid max-w-xl grid-cols-3 gap-1 rounded-2xl bg-slate-100 p-1">
-          {tabs.map((tb) => (
-            <button
-              key={tb.id}
-              onClick={() => onView(tb.id)}
-              className={`flex items-center justify-center gap-1.5 rounded-xl py-2 text-sm font-semibold transition ${
-                view === tb.id ? "bg-white text-slate-900 shadow-card" : "text-slate-500"
-              }`}
-            >
-              {tb.label}
-              {tb.badge > 0 && (
-                <span className={`min-w-[1.25rem] rounded-full px-1.5 py-0.5 text-[10px] leading-none text-white ${tb.tone}`}>{tb.badge}</span>
-              )}
-            </button>
-          ))}
         </div>
       </header>
 
-      <main className="mx-auto max-w-xl space-y-3 px-4 pt-3">
+      <main className="mx-auto max-w-md px-4 pb-32 pt-4">
+        <div className="flex items-end justify-between gap-3 px-1">
+          <h1 className="text-[34px] font-bold leading-[1.1] tracking-[-0.025em]">{title}</h1>
+          <button
+            onClick={onRefresh}
+            aria-label={tx.refresh}
+            className="agent-press mb-1 flex h-10 w-10 items-center justify-center rounded-full bg-white text-[var(--tint)] shadow-[var(--shadow-1)]"
+          >
+            <IconRefresh className={`h-[18px] w-[18px] ${loading ? "animate-spin" : ""}`} />
+          </button>
+        </div>
+
+        {view === "new" && today && (
+          <section className="agent-mesh agent-rise relative mt-4 overflow-hidden rounded-[28px] p-5 text-white shadow-[0_16px_40px_rgba(67,56,202,0.35)]">
+            <div className="absolute -end-10 -top-10 h-40 w-40 rounded-full bg-white/10 blur-2xl" aria-hidden />
+            <div className="relative flex items-center justify-between">
+              <p className="text-[13px] font-semibold uppercase tracking-[0.08em] text-white/75">{tx.today}</p>
+              {today.median_call_min !== null && today.median_call_min <= 5 && (
+                <span className="flex items-center gap-1 rounded-full bg-white/20 px-2.5 py-1 text-[12px] font-semibold backdrop-blur">
+                  <IconZap className="h-3.5 w-3.5" /> {tx.fast}
+                </span>
+              )}
+            </div>
+            <div className="relative mt-3 grid grid-cols-3 gap-3">
+              {[
+                [String(counts.new), tx.waitingNow],
+                [`${today.called}/${today.assigned}`, tx.calledToday],
+                [today.median_call_min === null ? "—" : `${today.median_call_min}${tx.min}`, tx.medianToCall],
+              ].map(([v, k]) => (
+                <div key={k}>
+                  <p className="text-[28px] font-bold leading-none tracking-[-0.02em] tabular-nums">{v}</p>
+                  <p className="mt-1.5 text-[12px] leading-tight text-white/75">{k}</p>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
         {!agent.available && (
-          <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">{tx.offShiftBanner}</div>
+          <div className="agent-card mt-4 flex items-start gap-3 rounded-[20px] p-4">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] bg-amber-100 text-amber-700">
+              <IconBell className="h-5 w-5" />
+            </span>
+            <p className="text-[15px] leading-snug text-[var(--label-2)]">{tx.offShiftBanner}</p>
+          </div>
         )}
         {setupIncomplete && (
-          <button
-            onClick={onSettings}
-            className="flex w-full items-center justify-between gap-3 rounded-2xl border border-brand-200 bg-brand-50 px-4 py-3 text-start text-sm text-brand-900"
-          >
-            <span>{tx.setupBanner}</span>
-            <span className="shrink-0 rounded-full bg-brand-600 px-3 py-1 text-xs font-semibold text-white">{tx.setupFix}</span>
+          <button onClick={onSetup} className="agent-card agent-press mt-4 flex w-full items-center gap-3 rounded-[20px] p-4 text-start">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] bg-[var(--tint)] text-white">
+              <IconBell className="h-5 w-5" />
+            </span>
+            <span className="min-w-0 flex-1 text-[15px] font-medium leading-snug">{tx.setupBanner}</span>
+            <IconChevronEnd className="h-5 w-5 shrink-0 text-[var(--label-3)] rtl:rotate-180" />
           </button>
         )}
 
-        <div className="flex gap-2">
+        <label className="mt-4 flex items-center gap-2 rounded-[12px] bg-[var(--fill-3)] px-3 py-2.5">
+          <IconSearch className="h-[18px] w-[18px] shrink-0 text-[var(--label-2)]" />
           <input
             value={search}
             onChange={(e) => onSearch(e.target.value)}
             placeholder={tx.search}
-            className="min-w-0 flex-1 rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-base shadow-card outline-none focus:border-brand-500"
+            className="min-w-0 flex-1 bg-transparent text-[17px] outline-none placeholder:text-[var(--label-2)]"
           />
-          <button
-            onClick={onRefresh}
-            aria-label={tx.refresh}
-            className="flex w-11 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-600 shadow-card"
-          >
-            <svg viewBox="0 0 24 24" className={`h-5 w-5 ${loading ? "animate-spin" : ""}`} fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
-              <path d="M21 12a9 9 0 11-3-6.7L21 8" />
-              <path d="M21 3v5h-5" />
-            </svg>
-          </button>
-        </div>
+        </label>
 
         {leads.length === 0 ? (
-          <div className="rounded-3xl border border-dashed border-slate-300 bg-white px-6 py-14 text-center">
-            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-50 text-emerald-600">
-              <PhoneIcon className="h-7 w-7" />
-            </div>
-            <p className="mt-4 font-semibold">
-              {view === "new" ? tx.emptyNew : view === "follow" ? tx.emptyFollow : tx.emptyAll}
-            </p>
-            {view === "new" && <p className="mt-1 text-sm text-slate-500">{tx.emptyNewSub}</p>}
-          </div>
+          <EmptyState tx={tx} view={view} />
         ) : (
-          <ul className="space-y-3">
-            {leads.map((l) => (
-              <LeadCard key={l.lead_id} tx={tx} lang={lang} lead={l} dict={dict} onOpen={() => onOpen(l.lead_id)} onCall={() => onCall(l)} />
+          <ul className="mt-4 space-y-3">
+            {leads.map((l, i) => (
+              <LeadCard
+                key={l.lead_id}
+                index={i}
+                tx={tx}
+                lang={lang}
+                lead={l}
+                dict={dict}
+                onOpen={() => onOpen(l.lead_id)}
+                onCall={() => onCall(l)}
+              />
             ))}
           </ul>
         )}
@@ -837,7 +1067,26 @@ function ListScreen({
   );
 }
 
+function EmptyState({ tx, view }: { tx: AgentText; view: View }) {
+  return (
+    <div className="agent-rise mt-10 flex flex-col items-center px-6 text-center">
+      <div className="relative flex h-28 w-28 items-center justify-center">
+        <span className="absolute inset-0 rounded-full bg-[#34C759]/10" />
+        <span className="absolute inset-4 rounded-full bg-[#34C759]/15" />
+        <span className="relative flex h-14 w-14 items-center justify-center rounded-full bg-[var(--call)] text-white shadow-[0_10px_24px_rgba(52,199,89,0.35)]">
+          {view === "new" ? <IconCheck className="h-7 w-7" strokeWidth={2.5} /> : <IconPhoneFilled className="h-6 w-6" />}
+        </span>
+      </div>
+      <p className="mt-5 text-[20px] font-semibold tracking-[-0.01em]">
+        {view === "new" ? tx.emptyNew : view === "follow" ? tx.emptyFollow : tx.emptyAll}
+      </p>
+      {view === "new" && <p className="mt-1.5 max-w-xs text-[15px] text-[var(--label-2)]">{tx.emptyNewSub}</p>}
+    </div>
+  );
+}
+
 function LeadCard({
+  index,
   tx,
   lang,
   lead,
@@ -845,6 +1094,7 @@ function LeadCard({
   onOpen,
   onCall,
 }: {
+  index: number;
   tx: AgentText;
   lang: AgentLang;
   lead: Lead;
@@ -852,8 +1102,8 @@ function LeadCard({
   onOpen: () => void;
   onCall: () => void;
 }) {
-  const stage = STAGE_BY_STATUS[lead.status];
   const isNew = lead.status === "new";
+  const waitMin = isNew && lead.assigned_at ? Math.max(0, Math.round((Date.now() - Date.parse(lead.assigned_at)) / 60_000)) : null;
   const due = lead.follow_up_at && Date.parse(lead.follow_up_at) <= Date.now();
   const preview = Object.entries(lead.raw_fields || {})
     .filter(([k, v]) => !CONTACT_KEY.test(k) && String(v ?? "").trim())
@@ -861,69 +1111,97 @@ function LeadCard({
     .map(([k, v]) => ({ q: questionLabel(dict, k), a: answerLabel(dict, k, v) }));
 
   return (
-    <li className="relative overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-card">
-      <span className="absolute inset-y-0 start-0 w-1.5" style={{ background: stage?.accent }} aria-hidden />
-      <div className="flex items-stretch">
-        <button onClick={onOpen} className="min-w-0 flex-1 px-4 py-3.5 ps-5 text-start">
-          <div className="flex items-center gap-2">
-            {isNew && <span className="stale-dot h-2.5 w-2.5 shrink-0 rounded-full bg-red-500" aria-hidden />}
-            <h3 dir="auto" className="truncate text-base font-bold">{lead.full_name || tx.unnamed}</h3>
-          </div>
-          <p className="mt-0.5 text-xs text-slate-500">
-            {isNew ? `${tx.waiting} ${ago(lead.assigned_at, tx)}` : `${tx.assigned} ${ago(lead.assigned_at, tx)}`}
-            {lead.campaign_name ? ` · ${lead.campaign_name}` : ""}
-          </p>
-          {preview.length > 0 && (
-            <dl className="mt-2 space-y-1">
-              {/* The row takes the question's direction, so an Arabic question
-                  and its answer read in order inside an English card too. */}
-              {preview.map((p) => (
-                <div key={p.q} dir={RTL_TEXT.test(p.q) ? "rtl" : "ltr"} className="text-start text-[13px] leading-snug">
-                  <dt className="inline text-slate-500">
-                    <bdi>{p.q}</bdi>:{" "}
-                  </dt>
-                  <dd className="inline font-semibold text-slate-800">
-                    <bdi>{p.a}</bdi>
-                  </dd>
-                </div>
-              ))}
-            </dl>
-          )}
-          <div className="mt-2.5 flex flex-wrap items-center gap-2">
-            <StageChip status={lead.status} lang={lang} />
-            {lead.follow_up_at && lead.status !== "new" && (
-              <span className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${due ? "bg-amber-100 text-amber-900" : "bg-slate-100 text-slate-600"}`}>
-                ⏰ {when(lead.follow_up_at, lang)}
-              </span>
+    <li className="agent-card agent-rise overflow-hidden rounded-[24px]" style={{ animationDelay: `${Math.min(index, 8) * 45}ms` }}>
+      <div className="flex items-center gap-3 p-3.5">
+        <button onClick={onOpen} className="flex min-w-0 flex-1 items-start gap-3 text-start">
+          <Avatar name={lead.full_name} seed={lead.lead_id} size={46} waitingMin={waitMin} />
+          <div className="min-w-0 flex-1 pt-0.5">
+            <div className="flex items-center gap-2">
+              <h3 dir="auto" className="truncate text-[17px] font-semibold tracking-[-0.02em]">{shownName(lead, tx)}</h3>
+              {lead.is_test && <TestChip tx={tx} />}
+            </div>
+            <p className="mt-0.5 truncate text-[13px] text-[var(--label-2)]">
+              {waitMin !== null ? (
+                <span className={`font-semibold ${urgency(waitMin).tone}`}>
+                  {tx.waiting} {ago(lead.assigned_at, tx)}
+                </span>
+              ) : (
+                <>
+                  {tx.assigned} {ago(lead.assigned_at, tx)}
+                </>
+              )}
+              {lead.campaign_name ? ` · ${lead.campaign_name}` : ""}
+            </p>
+            {preview.length > 0 && (
+              <dl className="mt-2 space-y-0.5">
+                {/* The row takes the question's direction, so an Arabic
+                    question and its answer read in order in an English card. */}
+                {preview.map((p) => (
+                  <div key={p.q} dir={RTL_TEXT.test(p.q) ? "rtl" : "ltr"} className="text-start text-[13px] leading-snug">
+                    <dt className="inline text-[var(--label-2)]">
+                      <bdi>{p.q}</bdi>:{" "}
+                    </dt>
+                    <dd className="inline font-semibold">
+                      <bdi>{p.a}</bdi>
+                    </dd>
+                  </div>
+                ))}
+              </dl>
             )}
-            {!!lead.call_count && <span className="text-[11px] text-slate-400">{tx.calls(lead.call_count)}</span>}
+            <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+              <StageChip status={lead.status} lang={lang} />
+              {lead.follow_up_at && !isNew && (
+                <span
+                  className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[12px] font-semibold ${
+                    due ? "bg-amber-100 text-amber-800" : "bg-[var(--fill-3)] text-[var(--label-2)]"
+                  }`}
+                >
+                  <IconClock className="h-3.5 w-3.5" />
+                  {when(lead.follow_up_at, lang)}
+                </span>
+              )}
+              {!!lead.call_count && <span className="text-[12px] text-[var(--label-2)]">{tx.calls(lead.call_count)}</span>}
+            </div>
           </div>
         </button>
         {lead.phone && (
-          <div className="flex items-center pe-3">
-            <button
-              onClick={onCall}
-              aria-label={tx.call}
-              className={`flex h-14 w-14 items-center justify-center rounded-full text-white shadow-raised active:scale-95 ${
-                isNew ? "bg-emerald-500" : "bg-emerald-600/90"
-              }`}
-            >
-              <PhoneIcon className="h-6 w-6" />
-            </button>
-          </div>
+          <button
+            onClick={onCall}
+            aria-label={tx.call}
+            className="agent-press flex h-[52px] w-[52px] shrink-0 items-center justify-center self-center rounded-full bg-[var(--call)] text-white shadow-[0_8px_18px_rgba(52,199,89,0.35)]"
+          >
+            <IconPhoneFilled className="h-6 w-6" />
+          </button>
         )}
       </div>
     </li>
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+// ── One lead ────────────────────────────────────────────────────────────────
+
+function Group({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section className="rounded-3xl border border-slate-200 bg-white p-4 shadow-card">
-      <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">{title}</h2>
-      <div className="mt-3">{children}</div>
+    <section className="mt-6">
+      <h2 className="px-4 text-[13px] font-semibold uppercase tracking-[0.04em] text-[var(--label-2)]">{title}</h2>
+      <div className="agent-card mt-2 overflow-hidden rounded-[20px]">{children}</div>
     </section>
   );
+}
+
+function NoteIcon({ n }: { n: Note }) {
+  const base = "flex h-8 w-8 shrink-0 items-center justify-center rounded-full";
+  if (n.kind === "call") return <span className={`${base} bg-[#34C759]/15 text-[#248A3D]`}>{n.body === "whatsapp" ? <IconWhatsApp className="h-4 w-4" /> : <IconPhone className="h-4 w-4" />}</span>;
+  if (n.kind === "assign") return <span className={`${base} bg-[var(--tint)]/10 text-[var(--tint)]`}><IconArrows className="h-4 w-4" /></span>;
+  if (n.kind === "stage" && n.to_status) {
+    const c = STAGE_BY_STATUS[n.to_status]?.accent ?? "#8E8E93";
+    return (
+      <span className={base} style={{ background: `${c}22`, color: c }}>
+        <IconCalendarCheck className="h-4 w-4" />
+      </span>
+    );
+  }
+  return <span className={`${base} bg-[var(--fill-3)] text-[var(--label-2)]`}><IconNote className="h-4 w-4" /></span>;
 }
 
 function LeadScreen({
@@ -951,101 +1229,98 @@ function LeadScreen({
 }) {
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
+  const waitMin =
+    lead && lead.status === "new" && lead.assigned_at ? Math.max(0, Math.round((Date.now() - Date.parse(lead.assigned_at)) / 60_000)) : null;
 
   return (
     <>
-      <header className="sticky top-0 z-30 flex items-center gap-2 border-b border-slate-200 bg-white/95 px-2 py-2 backdrop-blur">
-        <button onClick={onBack} aria-label={tx.back} className="flex h-11 w-11 items-center justify-center rounded-full text-slate-700 active:bg-slate-100">
-          <svg viewBox="0 0 24 24" className="h-6 w-6 rtl:rotate-180" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden>
-            <path d="M15 18l-6-6 6-6" />
-          </svg>
-        </button>
-        <h1 dir="auto" className="min-w-0 flex-1 truncate text-base font-bold">{lead?.full_name || ""}</h1>
+      <header className="sticky top-0 z-30 px-4 pt-3">
+        <div className="agent-glass mx-auto flex max-w-md items-center gap-1 rounded-full p-1.5">
+          <button onClick={onBack} aria-label={tx.back} className="agent-press flex h-10 w-10 items-center justify-center rounded-full text-[var(--tint)]">
+            <IconChevron className="h-6 w-6 rtl:rotate-180" strokeWidth={2.4} />
+          </button>
+          <h1 dir="auto" className="min-w-0 flex-1 truncate pe-3 text-[16px] font-semibold">{lead ? shownName(lead, tx) : ""}</h1>
+        </div>
       </header>
 
       {!lead ? (
-        <div className="flex justify-center py-20">
-          <div className="h-8 w-8 animate-spin rounded-full border-4 border-brand-200 border-t-brand-600" />
+        <div className="flex justify-center py-24">
+          <div className="h-8 w-8 animate-spin rounded-full border-[3px] border-[var(--fill)] border-t-[var(--tint)]" />
         </div>
       ) : (
-        <main className="mx-auto max-w-xl space-y-3 px-4 pt-4">
-          <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-card">
-            <div className="flex items-center gap-4">
-              <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-brand-50 text-lg font-bold text-brand-700">
-                {initials(lead.full_name)}
-              </div>
-              <div className="min-w-0">
-                <h2 dir="auto" className="truncate text-xl font-bold">{lead.full_name || tx.unnamed}</h2>
-                <p dir="ltr" className="text-start text-sm font-medium tabular-nums text-slate-600">{prettyPhone(lead.phone)}</p>
-              </div>
-            </div>
-            <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+        <main className="mx-auto max-w-md px-4 pb-36 pt-6">
+          <section className="agent-rise flex flex-col items-center text-center">
+            <Avatar name={lead.full_name} seed={lead.lead_id} size={84} waitingMin={waitMin} />
+            <h2 dir="auto" className="mt-3 text-[26px] font-bold leading-tight tracking-[-0.02em]">{shownName(lead, tx)}</h2>
+            <p dir="ltr" className="mt-1 text-[17px] tabular-nums text-[var(--label-2)]">{prettyPhone(lead.phone)}</p>
+            <div className="mt-3 flex flex-wrap items-center justify-center gap-1.5">
               <StageChip status={lead.status} lang={lang} />
-              <span>
+              {lead.is_test && <TestChip tx={tx} />}
+              <span className={`text-[13px] ${waitMin !== null ? `font-semibold ${urgency(waitMin).tone}` : "text-[var(--label-2)]"}`}>
                 {lead.status === "new" ? tx.waiting : tx.assigned} {ago(lead.assigned_at, tx)}
               </span>
-              <span>· {lead.call_count ? tx.calls(lead.call_count) : tx.neverCalled}</span>
+              <span className="text-[13px] text-[var(--label-2)]">· {lead.call_count ? tx.calls(lead.call_count) : tx.neverCalled}</span>
             </div>
-
-            {lead.follow_up_at && (
-              <div
-                className={`mt-3 rounded-2xl px-3 py-2 text-sm font-medium ${
-                  Date.parse(lead.follow_up_at) <= Date.now() ? "bg-amber-100 text-amber-900" : "bg-slate-100 text-slate-700"
-                }`}
-              >
-                ⏰ {Date.parse(lead.follow_up_at) <= Date.now() ? tx.followDue : tx.followUp}: {when(lead.follow_up_at, lang)}
-              </div>
-            )}
-
-            {lead.phone && (
-              <div className="mt-4 grid grid-cols-[1fr_auto] gap-2">
-                <button
-                  onClick={() => onCall(lead)}
-                  className="flex items-center justify-center gap-2 rounded-2xl bg-emerald-500 py-4 text-lg font-bold text-white shadow-raised active:scale-[0.99]"
-                >
-                  <PhoneIcon className="h-6 w-6" /> {tx.callNow}
-                </button>
-                <button
-                  onClick={() => onWhatsapp(lead)}
-                  aria-label={tx.whatsapp}
-                  className="flex w-16 items-center justify-center rounded-2xl border-2 border-emerald-500 text-emerald-600 active:scale-[0.99]"
-                >
-                  <WhatsIcon className="h-7 w-7" />
-                </button>
-              </div>
-            )}
-            <button
-              onClick={() => onOutcome(lead)}
-              className="mt-2 w-full rounded-2xl border-2 border-brand-200 bg-brand-50 py-3 text-base font-semibold text-brand-700 active:scale-[0.99]"
-            >
-              {tx.logOutcome}
-            </button>
           </section>
 
+          {/* Quick actions, Contacts-style: three equal tiles. */}
+          <div className="agent-rise mt-5 grid grid-cols-3 gap-2.5" style={{ animationDelay: "60ms" }}>
+            {[
+              { k: "call", label: tx.call, icon: <IconPhoneFilled className="h-6 w-6" />, on: () => onCall(lead), tone: "bg-[var(--call)] text-white shadow-[0_8px_18px_rgba(52,199,89,0.3)]" },
+              { k: "wa", label: tx.whatsapp, icon: <IconWhatsApp className="h-6 w-6" />, on: () => onWhatsapp(lead), tone: "agent-card text-[#25D366]" },
+              { k: "res", label: tx.logOutcome, icon: <IconCheck className="h-6 w-6" strokeWidth={2.5} />, on: () => onOutcome(lead), tone: "agent-card text-[var(--tint)]" },
+            ].map((a) => (
+              <button
+                key={a.k}
+                onClick={a.on}
+                disabled={a.k !== "res" && !lead.phone}
+                className={`agent-press flex flex-col items-center gap-1.5 rounded-[20px] px-2 py-3.5 disabled:opacity-40 ${a.tone}`}
+              >
+                {a.icon}
+                <span className={`text-[12px] font-semibold leading-tight ${a.k === "call" ? "text-white" : "text-[var(--label)]"}`}>{a.label}</span>
+              </button>
+            ))}
+          </div>
+
+          {lead.follow_up_at && (
+            <div
+              className={`agent-rise mt-4 flex items-center gap-3 rounded-[20px] p-4 ${
+                Date.parse(lead.follow_up_at) <= Date.now() ? "bg-amber-100 text-amber-900" : "agent-card"
+              }`}
+            >
+              <IconClock className="h-5 w-5 shrink-0" />
+              <div className="min-w-0 text-[15px]">
+                <p className="font-semibold">{Date.parse(lead.follow_up_at) <= Date.now() ? tx.followDue : tx.followUp}</p>
+                <p className="opacity-75">{when(lead.follow_up_at, lang)}</p>
+              </div>
+            </div>
+          )}
+
           {Object.keys(lead.raw_fields || {}).length > 0 && (
-            <Section title={tx.formAnswers}>
-              <dl className="divide-y divide-slate-100">
-                {Object.entries(lead.raw_fields || {}).map(([k, v]) => (
-                  <div key={k} className="py-2.5">
-                    <dt dir="auto" className="text-xs text-slate-500">{questionLabel(dict, k)}</dt>
-                    <dd dir="auto" className="mt-0.5 text-[15px] font-semibold text-slate-900">{answerLabel(dict, k, v)}</dd>
+            <Group title={tx.formAnswers}>
+              <dl>
+                {Object.entries(lead.raw_fields || {}).map(([k, v], i, all) => (
+                  <div key={k} className={`px-4 py-3 ${i < all.length - 1 ? "agent-hairline" : ""}`}>
+                    <dt dir="auto" className="text-[13px] text-[var(--label-2)]">{questionLabel(dict, k)}</dt>
+                    <dd dir="auto" className="mt-0.5 text-[17px] font-semibold tracking-[-0.01em]">{answerLabel(dict, k, v)}</dd>
                   </div>
                 ))}
               </dl>
-            </Section>
+            </Group>
           )}
 
-          <Section title={tx.history}>
-            <div className="flex gap-2">
+          <Group title={tx.history}>
+            <div className="agent-hairline flex items-center gap-2 p-3">
               <input
                 value={note}
                 onChange={(e) => setNote(e.target.value)}
                 placeholder={tx.addNote}
                 dir="auto"
-                className="min-w-0 flex-1 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-base outline-none focus:border-brand-500 focus:bg-white"
+                className="min-w-0 flex-1 rounded-full bg-[var(--fill-3)] px-4 py-2.5 text-[16px] outline-none placeholder:text-[var(--label-3)]"
               />
               <button
                 disabled={!note.trim() || saving}
+                aria-label={tx.save}
                 onClick={async () => {
                   setSaving(true);
                   try {
@@ -1055,74 +1330,84 @@ function LeadScreen({
                     setSaving(false);
                   }
                 }}
-                className="rounded-2xl bg-slate-900 px-4 text-sm font-semibold text-white disabled:opacity-40"
+                className="agent-press flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[var(--tint)] text-white disabled:opacity-30"
               >
-                {saving ? "…" : tx.save}
+                <IconSend className="h-[18px] w-[18px] rtl:-scale-x-100" />
               </button>
             </div>
-            <ol className="mt-4 space-y-3 border-s-2 border-slate-100 ps-4">
-              {notes.map((n) => (
-                <li key={n.id} className="relative">
-                  <span
-                    className="absolute top-1.5 h-2.5 w-2.5 rounded-full ring-4 ring-white"
-                    style={{
-                      insetInlineStart: "-23px",
-                      background:
-                        n.kind === "stage" && n.to_status
-                          ? STAGE_BY_STATUS[n.to_status]?.accent
-                          : n.kind === "call"
-                            ? "#10b981"
-                            : n.kind === "assign"
-                              ? "#6366f1"
-                              : "#cbd5e1",
-                    }}
-                  />
-                  <div className="text-[11px] text-slate-400">
-                    {when(n.created_at, lang)}
-                    {n.author && n.kind !== "assign" ? <span dir="auto"> · {n.author}</span> : null}
+            <ol className="px-4 py-2">
+              {notes.map((n, i) => (
+                <li key={n.id} className="relative flex gap-3 py-2.5">
+                  {i < notes.length - 1 && <span className="absolute bottom-0 start-4 top-11 w-px bg-[var(--separator)]" aria-hidden />}
+                  <NoteIcon n={n} />
+                  <div className="min-w-0 flex-1 pt-1">
+                    {n.kind === "stage" && n.to_status && (
+                      <p className="text-[15px]">
+                        {n.from_status && (
+                          <span className="text-[var(--label-2)]">
+                            {stageName(n.from_status, lang)} {lang === "ar" ? "←" : "→"}{" "}
+                          </span>
+                        )}
+                        <span className="font-semibold">{stageName(n.to_status, lang)}</span>
+                      </p>
+                    )}
+                    {n.kind === "call" && <p className="text-[15px] font-medium">{n.body === "whatsapp" ? tx.timelineWhatsapp : tx.timelineCall}</p>}
+                    {n.kind === "assign" && n.body && (
+                      <p className="text-[15px]">
+                        {tx.timelineAssign} <bdi className="font-semibold">{n.body}</bdi>
+                      </p>
+                    )}
+                    {n.body && (n.kind === "note" || n.kind === "stage") && (
+                      <p dir="auto" className="mt-0.5 whitespace-pre-wrap text-[15px] leading-snug">{n.body}</p>
+                    )}
+                    <p className="mt-0.5 text-[12px] text-[var(--label-2)]">
+                      {when(n.created_at, lang)}
+                      {n.author && n.kind !== "assign" ? <bdi> · {n.author}</bdi> : null}
+                    </p>
                   </div>
-                  {n.kind === "stage" && n.to_status && (
-                    <div className="mt-0.5 text-sm">
-                      {n.from_status && (
-                        <span className="text-slate-500">
-                          {stageName(n.from_status, lang)} {lang === "ar" ? "←" : "→"}{" "}
-                        </span>
-                      )}
-                      <span className="font-semibold">{stageName(n.to_status, lang)}</span>
-                    </div>
-                  )}
-                  {n.kind === "call" && (
-                    <div className="mt-0.5 text-sm text-slate-700">{n.body === "whatsapp" ? `💬 ${tx.timelineWhatsapp}` : `📞 ${tx.timelineCall}`}</div>
-                  )}
-                  {n.kind === "assign" && n.body && (
-                    <div className="mt-0.5 text-sm text-slate-700">
-                      {tx.timelineAssign} <span dir="auto" className="font-semibold">{n.body}</span>
-                    </div>
-                  )}
-                  {n.body && (n.kind === "note" || n.kind === "stage") && (
-                    <p dir="auto" className="mt-0.5 whitespace-pre-wrap text-sm text-slate-800">{n.body}</p>
-                  )}
                 </li>
               ))}
             </ol>
-          </Section>
+          </Group>
 
-          <Section title={tx.source}>
-            <dl className="divide-y divide-slate-100 text-sm">
+          <Group title={tx.source}>
+            <dl>
               {[
                 [tx.campaign, lead.campaign_name],
                 [tx.ad, lead.ad_name],
                 [tx.form, lead.form_name],
                 [tx.platform, lead.platform],
-              ].map(([k, v]) => (
-                <div key={k as string} className="flex justify-between gap-4 py-2">
-                  <dt className="shrink-0 text-slate-500">{k}</dt>
+              ].map(([k, v], i) => (
+                <div key={k as string} className={`flex justify-between gap-4 px-4 py-3 text-[15px] ${i < 3 ? "agent-hairline" : ""}`}>
+                  <dt className="shrink-0 text-[var(--label-2)]">{k}</dt>
                   <dd dir="auto" className="min-w-0 truncate text-end font-medium">{v || "—"}</dd>
                 </div>
               ))}
             </dl>
-          </Section>
+          </Group>
         </main>
+      )}
+
+      {/* The call bar: always under the thumb on a lead. */}
+      {lead && (
+        <div className="fixed inset-x-0 bottom-0 z-40 px-4 pb-[max(14px,env(safe-area-inset-bottom))]">
+          <div className="agent-glass mx-auto flex max-w-md gap-2 rounded-full p-1.5">
+            {lead.phone && (
+              <button
+                onClick={() => onCall(lead)}
+                className="agent-press flex flex-1 items-center justify-center gap-2 rounded-full bg-[var(--call)] py-3.5 text-[17px] font-semibold text-white"
+              >
+                <IconPhoneFilled className="h-5 w-5" /> {tx.callNow}
+              </button>
+            )}
+            <button
+              onClick={() => onOutcome(lead)}
+              className="agent-press flex flex-1 items-center justify-center gap-2 rounded-full bg-[var(--tint)] py-3.5 text-[17px] font-semibold text-white"
+            >
+              <IconCheck className="h-5 w-5" strokeWidth={2.5} /> {tx.logOutcome}
+            </button>
+          </div>
+        </div>
       )}
     </>
   );
@@ -1151,18 +1436,78 @@ function followTime(pick: FollowPick, custom: string): string | null {
   return null;
 }
 
+/** A big choice tile: tinted and checked when picked, quiet otherwise. */
+function Tile({
+  on,
+  color,
+  icon,
+  label,
+  onClick,
+}: {
+  on: boolean;
+  color: string;
+  icon: React.ReactNode;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      aria-pressed={on}
+      className="agent-press relative flex flex-col items-center justify-center gap-2 rounded-[20px] px-2 py-4 text-[14px] font-semibold"
+      style={{
+        background: on ? `${color}1F` : "var(--fill-3)",
+        color: on ? color : "var(--label)",
+        boxShadow: on ? `inset 0 0 0 2px ${color}` : "none",
+      }}
+    >
+      <span
+        className="flex h-11 w-11 items-center justify-center rounded-full text-white"
+        style={{ background: on ? color : "rgba(120,120,128,0.32)" }}
+      >
+        {icon}
+      </span>
+      <span className="leading-tight">{label}</span>
+      {on && (
+        <span className="agent-pop absolute end-2 top-2 flex h-5 w-5 items-center justify-center rounded-full text-white" style={{ background: color }}>
+          <IconCheck className="h-3 w-3" strokeWidth={3.5} />
+        </span>
+      )}
+    </button>
+  );
+}
+
+function Chip({ on, onClick, children, tone = "var(--tint)" }: { on: boolean; onClick: () => void; children: React.ReactNode; tone?: string }) {
+  return (
+    <button
+      onClick={onClick}
+      aria-pressed={on}
+      className="agent-press rounded-full px-3.5 py-2 text-[14px] font-medium"
+      style={{
+        background: on ? `${tone}1F` : "var(--fill-3)",
+        color: on ? tone : "var(--label)",
+        boxShadow: on ? `inset 0 0 0 1.5px ${tone}` : "none",
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
 function OutcomeSheet({
   tx,
   lang,
   lead,
   onClose,
   onSave,
+  onDone,
 }: {
   tx: AgentText;
   lang: AgentLang;
   lead: Lead;
   onClose: () => void;
   onSave: (p: { status: Status; note: string; follow_up_at: string | null; deal_value?: number }) => Promise<void>;
+  onDone: () => void;
 }) {
   const [call, setCall] = useState<CallResult | null>(null);
   const [result, setResult] = useState<Status | null>(null);
@@ -1172,6 +1517,7 @@ function OutcomeSheet({
   const [note, setNote] = useState("");
   const [deal, setDeal] = useState("");
   const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   // Sensible reminders, so the common case is one tap: an unanswered call is
@@ -1198,23 +1544,20 @@ function OutcomeSheet({
     setBusy(true);
     setErr(null);
     try {
-      const fullNote = [reasons.join("، "), note.trim()].filter(Boolean).join(" — ");
+      const fullNote = [reasons.join(lang === "ar" ? "، " : ", "), note.trim()].filter(Boolean).join(" — ");
       await onSave({
         status,
         note: fullNote,
         follow_up_at: closed ? null : followTime(follow, custom),
         ...(status === "reservation" && Number(deal) > 0 ? { deal_value: Number(deal) } : {}),
       });
+      setDone(true);
+      setTimeout(onDone, 900);
     } catch (e) {
       setErr((e as Error).message || tx.network);
       setBusy(false);
     }
   };
-
-  const big = (active: boolean, tone: string) =>
-    `flex flex-col items-center justify-center gap-1.5 rounded-2xl border-2 px-2 py-4 text-sm font-bold transition active:scale-[0.98] ${
-      active ? tone : "border-slate-200 bg-white text-slate-700"
-    }`;
 
   const follows: { id: FollowPick; label: string }[] = [
     { id: "1h", label: tx.inHour },
@@ -1227,145 +1570,138 @@ function OutcomeSheet({
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center">
-      <div className="absolute inset-0 bg-slate-900/40" onClick={onClose} />
-      <div className="relative max-h-[92vh] w-full max-w-xl overflow-y-auto rounded-t-[2rem] bg-white px-5 pb-8 pt-3 shadow-panel">
-        <div className="mx-auto mb-3 h-1.5 w-12 rounded-full bg-slate-200" />
-        <p dir="auto" className="text-center text-sm text-slate-500">{lead.full_name || tx.unnamed}</p>
-        <h2 className="mt-1 text-center text-lg font-bold">{tx.whatHappened}</h2>
-
-        <div className="mt-4 grid grid-cols-3 gap-2">
-          <button onClick={() => pickCall("answered")} className={big(call === "answered", "border-emerald-500 bg-emerald-50 text-emerald-800")}>
-            <span className="text-2xl">✅</span>
-            {tx.answered}
-          </button>
-          <button onClick={() => pickCall("no_answer")} className={big(call === "no_answer", "border-orange-500 bg-orange-50 text-orange-800")}>
-            <span className="text-2xl">📵</span>
-            {tx.noAnswer}
-          </button>
-          <button onClick={() => pickCall("unreachable")} className={big(call === "unreachable", "border-stone-500 bg-stone-100 text-stone-800")}>
-            <span className="text-2xl">⛔</span>
-            {tx.phoneOff}
-          </button>
-        </div>
-
-        {call === "answered" && (
-          <div className="mt-5">
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">{tx.result}</h3>
-            <div className="mt-2 grid grid-cols-3 gap-2">
-              <button onClick={() => pickResult("qualified")} className={big(result === "qualified", "border-violet-500 bg-violet-50 text-violet-800")}>
-                <span className="text-xl">⭐</span>
-                {tx.qualified}
-              </button>
-              <button onClick={() => pickResult("disqualified")} className={big(result === "disqualified", "border-red-500 bg-red-50 text-red-800")}>
-                <span className="text-xl">✖️</span>
-                {tx.notQualified}
-              </button>
-              <button onClick={() => pickResult("contacted")} className={big(result === "contacted", "border-sky-500 bg-sky-50 text-sky-800")}>
-                <span className="text-xl">🔁</span>
-                {tx.followUpNeeded}
-              </button>
-            </div>
-            <p className="mt-4 text-xs font-semibold uppercase tracking-wide text-slate-500">{tx.moreStages}</p>
-            <div className="mt-2 flex flex-wrap gap-2">
-              {LATER_STAGES.map((s) => {
-                const st = STAGE_BY_STATUS[s];
-                return (
-                  <button
-                    key={s}
-                    onClick={() => pickResult(s)}
-                    className={`rounded-full border px-3 py-1.5 text-sm font-semibold ${result === s ? st.color : "border-slate-200 bg-white text-slate-600"}`}
-                  >
-                    {stageName(s, lang)}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        {result === "disqualified" && (
-          <div className="mt-5">
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">{tx.why}</h3>
-            <div className="mt-2 flex flex-wrap gap-2">
-              {tx.reasons.map((r) => {
-                const on = reasons.includes(r);
-                return (
-                  <button
-                    key={r}
-                    onClick={() => setReasons(on ? reasons.filter((x) => x !== r) : [...reasons, r])}
-                    className={`rounded-full border px-3 py-1.5 text-sm font-medium ${on ? "border-red-400 bg-red-50 text-red-800" : "border-slate-200 bg-white text-slate-600"}`}
-                  >
-                    {r}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        {result === "reservation" && (
-          <label className="mt-5 block">
-            <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">{tx.dealValue}</span>
-            <input
-              value={deal}
-              onChange={(e) => setDeal(e.target.value.replace(/[^\d]/g, ""))}
-              inputMode="numeric"
-              dir="ltr"
-              className="mt-2 w-full rounded-2xl border border-slate-200 px-4 py-3 text-base outline-none focus:border-brand-500"
-            />
-          </label>
-        )}
-
-        {status && !closed && (
-          <div className="mt-5">
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">⏰ {tx.callAgain}</h3>
-            <div className="mt-2 flex flex-wrap gap-2">
-              {follows.map((f) => (
-                <button
-                  key={f.id}
-                  onClick={() => setFollow(f.id)}
-                  className={`rounded-full border px-3 py-1.5 text-sm font-medium ${
-                    follow === f.id ? "border-amber-400 bg-amber-50 text-amber-900" : "border-slate-200 bg-white text-slate-600"
-                  }`}
-                >
-                  {f.label}
-                </button>
-              ))}
-            </div>
-            {follow === "custom" && (
-              <input
-                type="datetime-local"
-                value={custom}
-                onChange={(e) => setCustom(e.target.value)}
-                className="mt-2 w-full rounded-2xl border border-slate-200 px-4 py-3 text-base"
-              />
+      <div className="agent-fade absolute inset-0 bg-black/40" onClick={() => !busy && onClose()} />
+      <div className="agent-sheet relative flex max-h-[92vh] w-full max-w-md flex-col rounded-t-[32px] bg-white shadow-[var(--shadow-3)]">
+        {done ? (
+          <div className="flex flex-col items-center justify-center px-6 py-16">
+            <span className="agent-pop flex h-20 w-20 items-center justify-center rounded-full bg-[var(--call)] text-white shadow-[0_12px_28px_rgba(52,199,89,0.4)]">
+              <svg viewBox="0 0 24 24" className="agent-check h-10 w-10" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <path d="M20 6 9 17l-5-5" />
+              </svg>
+            </span>
+            <p className="agent-rise mt-5 text-[22px] font-bold" style={{ animationDelay: "200ms" }}>{tx.saved.replace(/\s*✓$/, "")}</p>
+            {status && (
+              <p className="agent-rise mt-1 text-[15px] text-[var(--label-2)]" style={{ animationDelay: "260ms" }}>
+                {stageName(status, lang)}
+              </p>
             )}
           </div>
+        ) : (
+          <>
+            <div className="px-5 pt-2.5">
+              <div className="mx-auto h-1.5 w-10 rounded-full bg-[var(--fill)]" />
+              <div className="mt-3 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p dir="auto" className="truncate text-[13px] text-[var(--label-2)]">{shownName(lead, tx)}</p>
+                  <h2 className="text-[22px] font-bold tracking-[-0.02em]">{tx.whatHappened}</h2>
+                </div>
+                <button onClick={onClose} aria-label={tx.back} className="agent-press flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[var(--fill-3)] text-[var(--label-2)]">
+                  <IconChevron className="h-5 w-5 -rotate-90" />
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-5 pb-4">
+              <p className="mt-4 text-[13px] font-semibold text-[var(--label-2)]">{tx.step1}</p>
+              <div className="mt-2 grid grid-cols-3 gap-2.5">
+                <Tile on={call === "answered"} color="#34C759" icon={<IconPhone className="h-5 w-5" />} label={tx.answered} onClick={() => pickCall("answered")} />
+                <Tile on={call === "no_answer"} color="#FF9500" icon={<IconPhoneMissed className="h-5 w-5" />} label={tx.noAnswer} onClick={() => pickCall("no_answer")} />
+                <Tile on={call === "unreachable"} color="#8E8E93" icon={<IconPhoneOff className="h-5 w-5" />} label={tx.phoneOff} onClick={() => pickCall("unreachable")} />
+              </div>
+
+              {call === "answered" && (
+                <div className="agent-rise">
+                  <p className="mt-5 text-[13px] font-semibold text-[var(--label-2)]">{tx.step2}</p>
+                  <div className="mt-2 grid grid-cols-3 gap-2.5">
+                    <Tile on={result === "qualified"} color="#7C3AED" icon={<IconStar className="h-5 w-5" />} label={tx.qualified} onClick={() => pickResult("qualified")} />
+                    <Tile on={result === "disqualified"} color="#FF3B30" icon={<IconUserX className="h-5 w-5" />} label={tx.notQualified} onClick={() => pickResult("disqualified")} />
+                    <Tile on={result === "contacted"} color="#0EA5E9" icon={<IconRepeat className="h-5 w-5" />} label={tx.followUpNeeded} onClick={() => pickResult("contacted")} />
+                  </div>
+                  <p className="mt-4 text-[12px] font-semibold uppercase tracking-[0.04em] text-[var(--label-3)]">{tx.moreStages}</p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {LATER_STAGES.map((s) => (
+                      <Chip key={s} on={result === s} onClick={() => pickResult(s)} tone={STAGE_BY_STATUS[s].accent}>
+                        {stageName(s, lang)}
+                      </Chip>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {result === "disqualified" && (
+                <div className="agent-rise">
+                  <p className="mt-5 text-[13px] font-semibold text-[var(--label-2)]">{tx.why}</p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {tx.reasons.map((r) => (
+                      <Chip key={r} on={reasons.includes(r)} tone="#FF3B30" onClick={() => setReasons(reasons.includes(r) ? reasons.filter((x) => x !== r) : [...reasons, r])}>
+                        {r}
+                      </Chip>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {result === "reservation" && (
+                <label className="agent-rise mt-5 block">
+                  <span className="text-[13px] font-semibold text-[var(--label-2)]">{tx.dealValue}</span>
+                  <input
+                    value={deal}
+                    onChange={(e) => setDeal(e.target.value.replace(/[^\d]/g, ""))}
+                    inputMode="numeric"
+                    dir="ltr"
+                    className="mt-2 w-full rounded-[14px] bg-[var(--fill-3)] px-4 py-3.5 text-[17px] outline-none"
+                  />
+                </label>
+              )}
+
+              {status && (
+                <div className="agent-rise">
+                  {!closed && (
+                    <>
+                      <p className="mt-5 flex items-center gap-1.5 text-[13px] font-semibold text-[var(--label-2)]">
+                        <IconClock className="h-4 w-4" /> {tx.step3}
+                      </p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {follows.map((f) => (
+                          <Chip key={f.id} on={follow === f.id} tone="#D97706" onClick={() => setFollow(f.id)}>
+                            {f.label}
+                          </Chip>
+                        ))}
+                      </div>
+                      {follow === "custom" && (
+                        <input
+                          type="datetime-local"
+                          value={custom}
+                          onChange={(e) => setCustom(e.target.value)}
+                          className="mt-2 w-full rounded-[14px] bg-[var(--fill-3)] px-4 py-3 text-[16px]"
+                        />
+                      )}
+                    </>
+                  )}
+                  <textarea
+                    value={note}
+                    onChange={(e) => setNote(e.target.value)}
+                    rows={3}
+                    dir="auto"
+                    placeholder={tx.notePlaceholder}
+                    className="mt-4 w-full resize-none rounded-[18px] bg-[var(--fill-3)] px-4 py-3 text-[16px] outline-none placeholder:text-[var(--label-3)] focus:bg-white focus:shadow-[inset_0_0_0_1.5px_var(--tint)]"
+                  />
+                </div>
+              )}
+              {err && <p className="mt-3 text-center text-[14px] font-medium text-[#FF3B30]">{err}</p>}
+            </div>
+
+            <div className="agent-hairline border-t-0 px-5 pb-[max(16px,env(safe-area-inset-bottom))] pt-3 shadow-[0_-0.5px_0_var(--separator)]">
+              <button
+                onClick={save}
+                disabled={busy || !status}
+                className="agent-press w-full rounded-full bg-[var(--tint)] py-4 text-[17px] font-semibold text-white shadow-[0_8px_20px_rgba(79,70,229,0.3)] disabled:opacity-35 disabled:shadow-none"
+              >
+                {busy ? tx.saving : tx.saveOutcome}
+              </button>
+            </div>
+          </>
         )}
-
-        {status && (
-          <label className="mt-5 block">
-            <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">{tx.note}</span>
-            <textarea
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              rows={3}
-              dir="auto"
-              placeholder={tx.notePlaceholder}
-              className="mt-2 w-full resize-none rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-base outline-none focus:border-brand-500 focus:bg-white"
-            />
-          </label>
-        )}
-
-        {err && <p className="mt-3 text-center text-sm font-medium text-red-600">{err}</p>}
-
-        <button
-          onClick={save}
-          disabled={busy || !status}
-          className="mt-5 w-full rounded-2xl bg-brand-600 py-4 text-base font-bold text-white shadow-raised active:scale-[0.99] disabled:opacity-40"
-        >
-          {busy ? tx.saving : tx.saveOutcome}
-        </button>
       </div>
     </div>
   );
@@ -1373,15 +1709,50 @@ function OutcomeSheet({
 
 // ── Settings ────────────────────────────────────────────────────────────────
 
+/** An iOS settings row: a coloured icon square, a label, and what's on the end. */
+function Row({
+  icon,
+  color,
+  label,
+  sub,
+  end,
+  onClick,
+  last,
+}: {
+  icon: React.ReactNode;
+  color: string;
+  label: string;
+  sub?: string;
+  end?: React.ReactNode;
+  onClick?: () => void;
+  last?: boolean;
+}) {
+  const Tag = onClick ? "button" : "div";
+  return (
+    <Tag onClick={onClick} className={`flex w-full items-center gap-3 px-4 py-3 text-start ${onClick ? "agent-row" : ""}`}>
+      <span className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[8px] text-white" style={{ background: color }}>
+        {icon}
+      </span>
+      <span className={`flex min-w-0 flex-1 items-center gap-3 self-stretch ${last ? "" : "agent-hairline -mb-3 pb-3"}`}>
+        <span className="min-w-0 flex-1">
+          <span className="block text-[17px] tracking-[-0.02em]">{label}</span>
+          {sub && <span className="mt-0.5 block text-[13px] leading-snug text-[var(--label-2)]">{sub}</span>}
+        </span>
+        {end}
+      </span>
+    </Tag>
+  );
+}
+
 function SettingsScreen({
   tx,
   lang,
   agent,
   native,
   onLang,
-  onBack,
   onAvailable,
   onRefreshNative,
+  onTestLead,
   onLogout,
 }: {
   tx: AgentText;
@@ -1389,9 +1760,9 @@ function SettingsScreen({
   agent: Agent;
   native: NativeStatus | null;
   onLang: (l: AgentLang) => void;
-  onBack: () => void;
   onAvailable: (v: boolean) => void;
   onRefreshNative: () => void;
+  onTestLead: () => void;
   onLogout: () => void;
 }) {
   // The permission screens are the system's; coming back from one is the
@@ -1405,98 +1776,110 @@ function SettingsScreen({
     () =>
       native
         ? ([
-            ["notifications", tx.permNotifications, native.notifications],
-            ["fullscreen", tx.permFullScreen, native.fullScreen],
-            ["battery", tx.permBattery, native.battery],
-            ["call", tx.permCall, native.callPhone],
-          ] as const)
+            ["notifications", tx.permNotifications, native.notifications, <IconBell key="b" className="h-[18px] w-[18px]" />, "#FF3B30"],
+            ["fullscreen", tx.permFullScreen, native.fullScreen, <IconMaximize key="m" className="h-[18px] w-[18px]" />, "#5856D6"],
+            ["battery", tx.permBattery, native.battery, <IconBattery key="t" className="h-[18px] w-[18px]" />, "#34C759"],
+            ["call", tx.permCall, native.callPhone, <IconPhone key="p" className="h-[18px] w-[18px]" />, "#007AFF"],
+          ] as const).filter(([, , ok]) => ok !== undefined)
         : [],
     [native, tx]
   );
 
   return (
-    <>
-      <header className="sticky top-0 z-30 flex items-center gap-2 border-b border-slate-200 bg-white/95 px-2 py-2 backdrop-blur">
-        <button onClick={onBack} aria-label={tx.back} className="flex h-11 w-11 items-center justify-center rounded-full text-slate-700 active:bg-slate-100">
-          <svg viewBox="0 0 24 24" className="h-6 w-6 rtl:rotate-180" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden>
-            <path d="M15 18l-6-6 6-6" />
-          </svg>
-        </button>
-        <h1 className="text-base font-bold">{tx.settings}</h1>
-      </header>
+    <main className="mx-auto max-w-md px-4 pb-32 pt-6">
+      <h1 className="px-1 text-[34px] font-bold leading-[1.1] tracking-[-0.025em]">{tx.settings}</h1>
 
-      <main className="mx-auto max-w-xl space-y-3 px-4 pt-4">
-        <Section title={tx.account}>
-          <div className="flex items-center justify-between gap-3">
-            <div className="min-w-0">
-              <p dir="auto" className="truncate font-bold">{agent.name}</p>
-              <p dir="ltr" className="text-start text-sm text-slate-500">@{agent.username}</p>
-            </div>
-            <ShiftSwitch on={agent.available} tx={tx} onChange={onAvailable} />
-          </div>
-        </Section>
+      <section className="agent-card agent-rise mt-4 flex items-center gap-4 rounded-[24px] p-4">
+        <Avatar name={agent.name} seed={agent.id} size={52} />
+        <div className="min-w-0 flex-1">
+          <p dir="auto" className="truncate text-[20px] font-semibold tracking-[-0.02em]">{agent.name}</p>
+          <p dir="ltr" className="text-start text-[15px] text-[var(--label-2)]">@{agent.username}</p>
+        </div>
+      </section>
 
-        {native ? (
-          <Section title={tx.setup}>
-            <p className="-mt-1 mb-3 text-sm text-slate-500">{tx.setupSub}</p>
-            <ul className="divide-y divide-slate-100">
-              {checks.map(([key, label, ok]) =>
-                ok === undefined ? null : (
-                  <li key={key} className="flex items-center justify-between gap-3 py-2.5">
-                    <span className="flex items-center gap-2 text-sm">
-                      <span className={`flex h-5 w-5 items-center justify-center rounded-full text-[11px] text-white ${ok ? "bg-emerald-500" : "bg-red-500"}`}>
-                        {ok ? "✓" : "!"}
-                      </span>
-                      {label}
-                    </span>
-                    {ok ? (
-                      <span className="text-xs font-semibold text-emerald-700">{tx.ok}</span>
-                    ) : (
-                      <button
-                        onClick={() => bridge()?.fix(key)}
-                        className="rounded-full bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white"
-                      >
-                        {tx.fix}
-                      </button>
-                    )}
-                  </li>
+      <Group title={tx.profile}>
+        <Row
+          icon={<IconZap className="h-[18px] w-[18px]" />}
+          color="#34C759"
+          label={agent.available ? tx.onShift : tx.offShift}
+          end={<Switch on={agent.available} onChange={onAvailable} label={tx.onShift} />}
+        />
+        <Row
+          icon={<IconLanguages className="h-[18px] w-[18px]" />}
+          color="#5856D6"
+          label={tx.language}
+          end={<LangToggle lang={lang} onLang={onLang} />}
+          last
+        />
+      </Group>
+
+      {native ? (
+        <Group title={tx.ringSettings}>
+          {checks.map(([key, label, ok, icon, color]) => (
+            <Row
+              key={key}
+              icon={icon}
+              color={color}
+              label={label}
+              onClick={ok ? undefined : () => bridge()?.fix(key)}
+              end={
+                ok ? (
+                  <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[#34C759] text-white">
+                    <IconCheck className="h-3.5 w-3.5" strokeWidth={3.5} />
+                  </span>
+                ) : (
+                  <span className="rounded-full bg-[var(--tint)] px-3 py-1.5 text-[13px] font-semibold text-white">{tx.fix}</span>
                 )
-              )}
-            </ul>
-            <button
-              onClick={() => bridge()?.testRing()}
-              className="mt-3 w-full rounded-2xl border-2 border-emerald-500 py-3 text-base font-bold text-emerald-700 active:scale-[0.99]"
-            >
-              🔔 {tx.testRing}
-            </button>
-            <p className="mt-1.5 text-center text-xs text-slate-500">{tx.testRingSub}</p>
-            <p className="mt-3 rounded-2xl bg-slate-50 px-3 py-2.5 text-xs leading-relaxed text-slate-600">{tx.oemTip}</p>
-          </Section>
-        ) : (
-          <Section title={tx.setup}>
-            <p className="text-sm text-slate-600">{tx.webOnly}</p>
+              }
+            />
+          ))}
+          <Row
+            icon={<IconBell className="h-[18px] w-[18px]" />}
+            color="#FF9500"
+            label={tx.testRing}
+            sub={tx.testRingSub}
+            onClick={() => bridge()?.testRing()}
+            end={<IconChevronEnd className="h-5 w-5 text-[var(--label-3)] rtl:rotate-180" />}
+            last
+          />
+        </Group>
+      ) : (
+        <Group title={tx.ringSettings}>
+          <div className="p-4">
+            <p className="text-[15px] leading-snug text-[var(--label-2)]">{tx.webOnly}</p>
             <a
               href="https://github.com/Dlleni-Real-Estate/Conversions-API/releases/latest/download/dlleni-agent.apk"
-              className="mt-3 flex w-full items-center justify-center rounded-2xl bg-emerald-600 py-3 text-base font-bold text-white"
+              className="agent-press mt-3 flex w-full items-center justify-center gap-2 rounded-full bg-[var(--call)] py-3.5 text-[17px] font-semibold text-white"
             >
-              ⬇ {tx.download}
+              {tx.download}
             </a>
-          </Section>
-        )}
+          </div>
+        </Group>
+      )}
 
-        <Section title={tx.language}>
-          <LangToggle lang={lang} onLang={onLang} />
-        </Section>
+      <Group title={tx.testing}>
+        <Row
+          icon={<IconFlask className="h-[18px] w-[18px]" />}
+          color="#AF52DE"
+          label={tx.testLead}
+          sub={tx.testLeadSub}
+          onClick={onTestLead}
+          end={<IconChevronEnd className="h-5 w-5 text-[var(--label-3)] rtl:rotate-180" />}
+          last
+        />
+      </Group>
 
-        <button onClick={onLogout} className="w-full rounded-2xl border border-red-200 bg-white py-3 text-base font-semibold text-red-600">
-          {tx.logout}
-        </button>
-        {native?.version && (
-          <p className="text-center text-xs text-slate-400">
-            {tx.version} {native.version}
-          </p>
-        )}
-      </main>
-    </>
+      {native && <p className="mt-3 px-4 text-[13px] leading-snug text-[var(--label-2)]">{tx.oemTip}</p>}
+
+      <div className="agent-card mt-6 overflow-hidden rounded-[20px]">
+        <Row icon={<IconLogOut className="h-[18px] w-[18px]" />} color="#FF3B30" label={tx.logout} onClick={onLogout} last />
+      </div>
+
+      {native?.version && (
+        <p className="mt-4 text-center text-[13px] text-[var(--label-3)]">
+          {tx.version} {native.version}
+        </p>
+      )}
+    </main>
   );
 }
