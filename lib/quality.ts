@@ -35,6 +35,7 @@ const STAGE_BASE: Record<Status, number> = {
   // already folded into these app statuses by lib/crm.ts before this runs.
   new: 10,
   no_answer: 5,
+  unreachable: 3,
   contacted: 30,
   qualified: 55,
   meeting_booked: 70,

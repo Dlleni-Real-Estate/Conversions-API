@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
+import { agentsSchemaReady } from "@/lib/schema";
 import { isAuthed } from "@/lib/auth";
 import { chainFor, type Status } from "@/lib/stages";
 import { capiEventId } from "@/lib/capi";
@@ -34,6 +35,7 @@ export async function GET(req: NextRequest) {
   const scoped = campaign && campaign !== "all" ? campaign : null;
 
   let q = db.from("leads").select("lead_id,status,campaign_name,submitted_at").limit(2000);
+  if (await agentsSchemaReady(db)) q = q.eq("is_test", false);
   if (scoped) q = q.eq("campaign_id", scoped);
   const { data: leadRows, error } = await q;
   if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });

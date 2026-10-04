@@ -47,6 +47,73 @@ body {
 }
 .stale-dot { animation: stale-pulse 2.4s ease-in-out infinite; }
 
+/* ── Agent app ─────────────────────────────────────────────────────────────
+   Apple's app language: opaque grouped content, glass only on the floating
+   chrome (top bar, tab bar, action bar), one indigo tint for interaction and
+   green reserved for "call". Scoped, so the dashboard is untouched. */
+.agent-app {
+  --tint: #4f46e5;
+  --call: #34c759;
+  --label: #0b0b0f;
+  --label-2: rgba(60, 60, 67, 0.6);
+  --label-3: rgba(60, 60, 67, 0.3);
+  --bg-grouped: #f2f2f7;
+  --fill: rgba(120, 120, 128, 0.2);
+  --fill-3: rgba(118, 118, 128, 0.12);
+  --separator: rgba(60, 60, 67, 0.18);
+  --shadow-1: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-3: 0 12px 32px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.06);
+  --ease: cubic-bezier(0.25, 1, 0.5, 1);
+  --ease-sheet: cubic-bezier(0.32, 0.72, 0, 1);
+  background: var(--bg-grouped);
+  color: var(--label);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", Roboto, "Noto Sans Arabic", "Noto Sans", sans-serif;
+  -webkit-tap-highlight-color: transparent;
+  letter-spacing: -0.01em;
+}
+.agent-glass {
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: saturate(180%) blur(24px);
+  -webkit-backdrop-filter: saturate(180%) blur(24px);
+  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.06), var(--shadow-3);
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .agent-glass { background: rgba(255, 255, 255, 0.96); }
+}
+.agent-card { background: #fff; box-shadow: var(--shadow-1); }
+.agent-hairline { box-shadow: inset 0 -0.5px 0 var(--separator); }
+.agent-press { transition: transform 150ms var(--ease), opacity 150ms var(--ease), background-color 300ms var(--ease); }
+.agent-press:active { transform: scale(0.96); }
+.agent-row:active { background: var(--fill-3); transition: background 0s; }
+/* The "today" card: a mesh of the brand colours, the one loud surface. */
+.agent-mesh {
+  background:
+    radial-gradient(120% 140% at 0% 0%, #6366f1 0%, transparent 55%),
+    radial-gradient(90% 120% at 100% 0%, #a855f7 0%, transparent 55%),
+    radial-gradient(120% 140% at 100% 100%, #10b981 0%, transparent 60%),
+    #4338ca;
+}
+@keyframes agent-rise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+.agent-rise { animation: agent-rise 420ms var(--ease) both; }
+@keyframes agent-sheet { from { transform: translateY(100%); } to { transform: none; } }
+.agent-sheet { animation: agent-sheet 440ms var(--ease-sheet) both; }
+@keyframes agent-fade { from { opacity: 0; } to { opacity: 1; } }
+.agent-fade { animation: agent-fade 250ms var(--ease) both; }
+@keyframes agent-pop { 0% { transform: scale(0.6); opacity: 0; } 60% { transform: scale(1.08); opacity: 1; } 100% { transform: scale(1); } }
+.agent-pop { animation: agent-pop 460ms var(--ease) both; }
+@keyframes agent-draw { to { stroke-dashoffset: 0; } }
+.agent-check path { stroke-dasharray: 30; stroke-dashoffset: 30; animation: agent-draw 420ms 160ms var(--ease) forwards; }
+/* A lead that is waiting breathes, so a waiting lead is never just a row. */
+@keyframes agent-ping { 0% { transform: scale(1); opacity: 0.55; } 100% { transform: scale(1.7); opacity: 0; } }
+.agent-ping { animation: agent-ping 1.6s var(--ease) infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .agent-app *, .agent-app *::before, .agent-app *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
 *:focus-visible {
   outline: 2px solid #6366f1;
   outline-offset: 2px;

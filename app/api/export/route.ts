@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
+import { agentsSchemaReady } from "@/lib/schema";
 import { isAuthed } from "@/lib/auth";
 import { STAGE_BY_STATUS, type Status } from "@/lib/stages";
 import { answerLabel, buildDictionary, questionLabel } from "@/lib/labels";
@@ -68,6 +69,7 @@ const OPEN_STATUSES = [
   "new",
   "contacted",
   "no_answer",
+  "unreachable",
   "qualified",
   "meeting_booked",
   "meeting_done",
@@ -90,6 +92,7 @@ export async function GET(req: NextRequest) {
     )
     .order("submitted_at", { ascending: false })
     .limit(5000);
+  if (await agentsSchemaReady(db)) q = q.eq("is_test", false);
 
   const account = (p.get("account") || "").replace(/^act_/, "");
   if (account && account !== "all") q = q.eq("ad_account_id", account);

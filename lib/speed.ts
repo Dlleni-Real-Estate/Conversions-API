@@ -419,7 +419,7 @@ export function timeStats(values: number[]): TimeStats {
 
 /** Stage ranks, mirrored from lib/stages.ts so this file stays dependency-free. */
 const RANK: Record<string, number> = {
-  new: 0, contacted: 1, no_answer: -1, qualified: 2, meeting_booked: 3, meeting_done: 4,
+  new: 0, contacted: 1, no_answer: -1, unreachable: -1, qualified: 2, meeting_booked: 3, meeting_done: 4,
   site_visit_booked: 5, site_visit_done: 6, eoi: 7, reservation: 8, disqualified: -2,
 };
 

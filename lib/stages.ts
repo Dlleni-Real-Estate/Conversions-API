@@ -20,6 +20,7 @@ export type Status =
   | "new"
   | "contacted"
   | "no_answer"
+  | "unreachable"
   | "qualified"
   | "meeting_booked"
   | "meeting_done"
@@ -102,6 +103,23 @@ export const STAGES: StageDef[] = [
     accent: "#f97316",
     hint: "Called, nobody picked up",
     hintAr: "اتصلنا وما ردّش",
+  },
+  {
+    // Not the same as no answer: a phone that rings out and a phone that is
+    // switched off or out of service call for different follow-ups. Negative,
+    // so like NoAnswer it implies nothing about qualification and must be
+    // removed from the funnel screen in Events Manager.
+    status: "unreachable",
+    label: "Phone off",
+    labelAr: "مقفول / مش متاح",
+    event: "Unreachable",
+    rank: -1,
+    positive: false,
+    color: "bg-stone-100 text-stone-700 border-stone-300",
+    soft: "bg-stone-50",
+    accent: "#78716c",
+    hint: "Switched off, out of service or unreachable",
+    hintAr: "التليفون مقفول أو خارج الخدمة",
   },
   {
     status: "qualified",

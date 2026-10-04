@@ -4,18 +4,22 @@ import { isAuthed } from "@/lib/auth";
 import { rankOf, type Status } from "@/lib/stages";
 import { buildDictionary } from "@/lib/labels";
 import type { FormSchema } from "@/lib/meta";
+import { agentsSchemaReady } from "@/lib/schema";
 
 export const dynamic = "force-dynamic";
 
 const LEAD_COLUMNS =
   "lead_id,full_name,phone,email,status,status_at,notes,owner,deal_value,submitted_at," +
   "campaign_id,campaign_name,adset_id,adset_name,ad_id,ad_name,form_name,platform,raw_fields,quality_score";
+/** Migration 0015's columns, read only once it has run (lib/schema.ts). */
+const AGENT_COLUMNS = ",agent_id,assigned_at,acked_at,first_call_at,call_count,follow_up_at";
 
 /** Still worth a phone call — the default working view. */
 const OPEN_STATUSES = [
   "new",
   "contacted",
   "no_answer",
+  "unreachable",
   "qualified",
   "meeting_booked",
   "meeting_done",
@@ -28,11 +32,13 @@ export async function GET(req: NextRequest) {
   const p = req.nextUrl.searchParams;
   const db = supabaseAdmin();
 
+  const agentsReady = await agentsSchemaReady(db);
   let q = db
     .from("leads")
-    .select(LEAD_COLUMNS, { count: "exact" })
+    .select(LEAD_COLUMNS + (agentsReady ? AGENT_COLUMNS : ""), { count: "exact" })
     .order("submitted_at", { ascending: false })
     .limit(Number(p.get("limit") || 500));
+  if (agentsReady) q = q.eq("is_test", false);
 
   const account = (p.get("account") || "").replace(/^act_/, "");
   if (account && account !== "all") q = q.eq("ad_account_id", account);

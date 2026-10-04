@@ -7,12 +7,14 @@ import {
   fetchCampaignAdInsights,
   fetchCampaignInsights,
   fetchFormSchema,
-  flattenFields,
   normalizeEgyptPhone,
   type AccountScope,
   type FormSchema,
 } from "@/lib/meta";
 import { activeAccounts, scopeIndex } from "@/lib/accounts";
+import { leadRow } from "@/lib/ingest";
+import { agentsSchemaReady } from "@/lib/schema";
+import { routePending, routedCampaignIds, CRM_HOLD_MS } from "@/lib/routing";
 import { resolveCampaigns } from "@/lib/tracking";
 import { supabaseAdmin } from "@/lib/supabase";
 import { isAuthed } from "@/lib/auth";
@@ -289,32 +291,7 @@ export async function GET(req: NextRequest) {
           const raw = await fetchAdLeads(ad.id, since, scope);
           found += raw.length;
 
-          for (const lead of raw) {
-            const { fields, full_name, phone, email } = flattenFields(lead);
-            rows.push({
-              lead_id: lead.id,
-              form_id: lead.form_id ?? null,
-              form_name: (lead.form_id && formNames.get(lead.form_id)) || null,
-              page_id: scope.pageId || process.env.META_PAGE_ID,
-              ad_account_id: scope.adAccountId,
-              // Names come from the walk, so they are right even when Meta
-              // omits them from the lead object.
-              ad_id: ad.id,
-              ad_name: ad.name,
-              adset_id: ad.adset_id ?? lead.adset_id ?? null,
-              adset_name: ad.adset_name ?? lead.adset_name ?? null,
-              campaign_id: campaign.id,
-              campaign_name: campaign.name,
-              platform: lead.platform ?? null,
-              is_organic: lead.is_organic ?? false,
-              submitted_at: lead.created_time,
-              full_name: full_name ?? null,
-              phone: normalizeEgyptPhone(phone) ?? null,
-              email: email ?? null,
-              raw_fields: fields,
-              synced_at: new Date().toISOString(),
-            });
-          }
+          for (const lead of raw) rows.push(leadRow(lead, ad, campaign, scope, formNames));
         }
 
         leadsFound += found;
@@ -364,6 +341,15 @@ export async function GET(req: NextRequest) {
     if (deferred.length > 0) {
       console.warn(`[sync] run budget: ${deferred.length} campaign(s) wait for the next run: ${deferred.join(" | ")}`);
     }
+
+    // Routed campaigns' new leads go to their agents BEFORE the 8X push below
+    // runs, so a lead this app hands to an agent is never also sent to 8X.
+    // The one-minute agent tick does the same faster; this is the net under it.
+    const routing = await routePending(db).catch((err) => {
+      console.error(`[sync] routing failed: ${err instanceof Error ? err.message : err}`);
+      return { routed: 0, waiting: 0 };
+    });
+    done("routing");
 
     // Hand the sales team the leads they cannot otherwise see. Only accounts
     // explicitly opted in (ad_accounts.crm_push) are pushed - the original
@@ -418,7 +404,7 @@ export async function GET(req: NextRequest) {
     console.log(
       `[sync] accounts=${accounts.length} campaigns=${tracked.length}/${states.length} ads=${adsSeen} ` +
         `leads=${leadsFound} new=${leadsNew} stageEvents=${stageEvents} ` +
-        `insights=${insightsRows} forms=${formsStored} ` +
+        `insights=${insightsRows} forms=${formsStored} routed=${routing.routed} ` +
         `crmPush=${crmPushed.pushed}/${crmPushed.pushed + crmPushed.failed}${crmPushed.left ? ` (+${crmPushed.left} queued)` : ""} ` +
         `crm=${crm.skipped ?? `${crm.matched}/${crm.scanned} matched, ${crm.changed} moved, ${crm.owners} owners, ${crm.notes} notes`}` +
         ` took=${Date.now() - runStart}ms (` +
@@ -437,6 +423,7 @@ export async function GET(req: NextRequest) {
       insightsRows,
       stageEvents,
       formsStored,
+      routing,
       crmPushed,
       crm,
       deferred,
@@ -585,14 +572,19 @@ async function pushLeadsToCrm(
   if (!optedIn || optedIn.length === 0) return { pushed: 0, failed: 0, left: 0 };
   const ids = optedIn.map((a) => String(a.ad_account_id));
 
-  const { data: due, error } = await db
+  let dueQuery = db
     .from("leads")
-    .select("lead_id,full_name,phone,email,form_id,raw_fields,campaign_name,ad_name,crm_push_error")
+    .select("lead_id,full_name,phone,email,form_id,raw_fields,campaign_id,campaign_name,ad_name,submitted_at,crm_push_error")
     .in("ad_account_id", ids)
     .is("crm_pushed_at", null)
     .not("phone", "is", null)
     .order("submitted_at", { ascending: true })
     .limit(limit + 1);
+  // A lead handed to an agent in this app is that agent's. Pushing it to 8X
+  // as well puts a second person on the same phone call; a test lead is
+  // nobody at all. (Only once migration 0015 has run - lib/schema.ts.)
+  if (await agentsSchemaReady(db)) dueQuery = dueQuery.is("agent_id", null).eq("is_test", false);
+  const { data: due, error } = await dueQuery;
 
   if (error) {
     console.error(`[sync] crm push: cannot read the queue - ${error.message}`);
@@ -606,11 +598,20 @@ async function pushLeadsToCrm(
     email: string | null;
     form_id: string | null;
     raw_fields: Record<string, string> | null;
+    campaign_id: string | null;
     campaign_name: string | null;
     ad_name: string | null;
+    submitted_at: string;
     crm_push_error: string | null;
   }[];
   if (rows.length === 0) return { pushed: 0, failed: 0, left: 0 };
+
+  // A routed campaign's lead with no agent yet is waiting for the minute tick,
+  // not abandoned. Only once it has waited past the hold - nobody eligible in
+  // the rule - does 8X become the fallback that gets it called at all.
+  const routed = await routedCampaignIds(db);
+  const held = (r: (typeof rows)[number]) =>
+    !!r.campaign_id && routed.has(r.campaign_id) && Date.now() - Date.parse(r.submitted_at) < CRM_HOLD_MS;
 
   // A 4xx is a verdict on the payload, not a hiccup: the same body will be
   // refused again forever. Retrying it every ten minutes is how thirteen leads
@@ -623,8 +624,8 @@ async function pushLeadsToCrm(
     !!e && /^HTTP 4/.test(e) && !/^HTTP 429/.test(e) &&
     !/description may not be greater/.test(e);
 
-  const live = rows.filter((r) => !permanentlyRefused(r.crm_push_error));
-  const stuck = rows.length - live.length;
+  const live = rows.filter((r) => !permanentlyRefused(r.crm_push_error) && !held(r));
+  const stuck = rows.filter((r) => permanentlyRefused(r.crm_push_error)).length;
   if (stuck > 0) console.warn(`[sync] crm push: ${stuck} lead(s) parked on a permanent refusal`);
 
   const batch = live.slice(0, limit);
@@ -742,12 +743,15 @@ async function sendMissingStageEvents(
 
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 3600_000).toISOString();
 
-  const { data: recent, error: leadErr } = await db
+  let recentQuery = db
     .from("leads")
     .select("lead_id, phone, email, status, deal_value, ad_account_id, quality_score, submitted_at, status_at, raw_fields")
     .gte("submitted_at", sevenDaysAgo)
     .order("submitted_at", { ascending: false })
     .limit(limit);
+  // Test leads are pretend customers; Meta must never hear of them.
+  if (await agentsSchemaReady(db)) recentQuery = recentQuery.eq("is_test", false);
+  const { data: recent, error: leadErr } = await recentQuery;
 
   if (leadErr) console.error("[sync] stage sweep: lead query failed —", leadErr.message);
   if (!recent || recent.length === 0) {
@@ -1023,12 +1027,29 @@ async function syncCrmStatuses(
   const { data: noCrm } = await db.from("ad_accounts").select("ad_account_id").eq("crm_sync", false);
   const crmExcluded = new Set((noCrm ?? []).map((a) => String(a.ad_account_id)));
 
-  const { data: allOurs, error } = await db
+  const agentsReady = await agentsSchemaReady(db);
+  let oursQuery = db
     .from("leads")
-    .select("lead_id,status,owner,phone,crm_created_at,submitted_at,crm_returning_since,crm_lookup_at,crm_pushed_at,ad_account_id");
+    .select(
+      "lead_id,status,owner,phone,crm_created_at,submitted_at,crm_returning_since,crm_lookup_at,crm_pushed_at,ad_account_id" +
+        (agentsReady ? ",agent_id" : "")
+    );
+  if (agentsReady) oursQuery = oursQuery.eq("is_test", false);
+  const { data: allOurs, error } = await oursQuery;
   if (error) return skippedResult(error.message);
-  const ours = (allOurs ?? []).filter(
-    (l) => !crmExcluded.has(String((l as { ad_account_id?: string | null }).ad_account_id ?? ""))
+  // The same goes for a single lead handed to an agent in the agent app: its
+  // stage is what that agent picked after the call, and 8X must not overwrite
+  // it. To the mirror, neither kind of lead exists (nor do test leads).
+  // The column list is built at runtime (agent_id only once 0015 has run), so
+  // the row type is stated rather than inferred.
+  type MirrorRow = {
+    lead_id: string; status: string; owner: string | null; phone: string | null;
+    crm_created_at: string | null; submitted_at: string; crm_returning_since: string | null;
+    crm_lookup_at: string | null; crm_pushed_at: string | null; ad_account_id: string | null;
+    agent_id?: string | null;
+  };
+  const ours = ((allOurs ?? []) as unknown as MirrorRow[]).filter(
+    (row) => !crmExcluded.has(String(row.ad_account_id ?? "")) && !row.agent_id
   );
   type Ours = {
     lead_id: string; phone: string | null; owner: string | null; submitted_at: string;

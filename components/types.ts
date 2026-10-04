@@ -26,6 +26,58 @@ export type Lead = {
   /** Newest note on this lead - usually what the agent wrote in 8X. */
   last_note?: { body: string; author: string | null; at: string | null } | null;
   rank?: number;
+  /** Set when the lead was handed to an agent in the agent app. */
+  agent_id?: string | null;
+  assigned_at?: string | null;
+  acked_at?: string | null;
+  first_call_at?: string | null;
+  call_count?: number | null;
+  follow_up_at?: string | null;
+};
+
+export type AgentStats = {
+  leads_30d: number;
+  today: number;
+  untouched: number;
+  called: number;
+  median_call_min: number | null;
+  within5_pct: number | null;
+  qualified: number;
+  disqualified: number;
+};
+
+export type AgentRow = {
+  id: string;
+  name: string;
+  username: string;
+  phone: string | null;
+  active: boolean;
+  available: boolean;
+  last_seen_at: string | null;
+  app_version: string | null;
+  online: boolean;
+  stats: AgentStats;
+};
+
+export type RouteRow = { campaign_id: string; agent_id: string; weight: number; assigned: number };
+
+export type RoutingRuleRow = {
+  campaign_id: string;
+  campaign_name: string | null;
+  ad_account_id: string | null;
+  enabled: boolean;
+  since: string;
+  reassign_after_min: number | null;
+  routes: RouteRow[];
+};
+
+export type CampaignOption = {
+  id: string;
+  name: string;
+  ad_account_id: string | null;
+  last: string;
+  leads_7d: number;
+  unworked_72h: number;
 };
 
 export type AdRow = {
