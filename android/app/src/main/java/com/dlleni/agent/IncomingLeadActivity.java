@@ -11,9 +11,12 @@ import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.view.KeyEvent;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.Button;
@@ -26,12 +29,25 @@ import android.widget.TextView;
  * phone is locked or the screen is off. Built in code - it is one screen, and
  * it has to appear instantly with no network and no web page behind it.
  *
- * The ringtone itself belongs to the notification, so it keeps sounding
- * whether this screen is up or the agent sees the heads-up banner instead.
+ * The sound comes from the Ringer, so it keeps sounding whether this screen
+ * is up or the agent sees the heads-up banner instead. A volume key silences
+ * it, like a call; the screen closes itself once the ring is over.
  */
 public class IncomingLeadActivity extends Activity {
-    private String leadId;
-    private String phone;
+    private Alerts.Lead lead;
+    private final Handler ui = new Handler(Looper.getMainLooper());
+    private final Runnable watch = new Runnable() {
+        @Override
+        public void run() {
+            // The minute is up, or it was answered on the notification or
+            // another phone: nothing left to show.
+            if (!Ringer.isRinging()) {
+                finish();
+                return;
+            }
+            ui.postDelayed(this, 1000);
+        }
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -45,6 +61,22 @@ public class IncomingLeadActivity extends Activity {
         }
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         render(getIntent());
+        ui.postDelayed(watch, 2000);
+    }
+
+    @Override
+    protected void onDestroy() {
+        ui.removeCallbacks(watch);
+        super.onDestroy();
+    }
+
+    @Override
+    public boolean onKeyDown(int keyCode, KeyEvent event) {
+        if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
+            Ringer.silence();
+            return true;
+        }
+        return super.onKeyDown(keyCode, event);
     }
 
     @Override
@@ -60,16 +92,19 @@ public class IncomingLeadActivity extends Activity {
 
     private void render(Intent in) {
         boolean ar = Alerts.arabic(this);
-        leadId = in.getStringExtra("lead_id");
-        phone = in.getStringExtra("phone");
-        String name = in.getStringExtra("name");
-        String campaign = in.getStringExtra("campaign");
-        String answers = in.getStringExtra("answers");
+        lead = Alerts.Lead.fromExtras(in);
+        boolean callback = lead.isCallback();
+        String phone = lead.phone;
+        String name = lead.name;
+        String campaign = callback
+                ? (lead.stage.isEmpty() ? "" : (ar ? "آخر نتيجة: " : "Last: ") + lead.stage)
+                : lead.campaign;
+        String answers = lead.answers;
         int waiting = in.getIntExtra("waiting", 0);
 
         FrameLayout root = new FrameLayout(this);
         GradientDrawable bg = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                new int[]{0xFF312E81, 0xFF4F46E5, 0xFF047857});
+                callback ? new int[]{0xFF78350F, 0xFFB45309, 0xFF047857} : new int[]{0xFF312E81, 0xFF4F46E5, 0xFF047857});
         root.setBackground(bg);
 
         LinearLayout col = new LinearLayout(this);
@@ -78,7 +113,9 @@ public class IncomingLeadActivity extends Activity {
         col.setPadding(dp(28), dp(56), dp(28), dp(36));
         root.addView(col, new FrameLayout.LayoutParams(-1, -1));
 
-        TextView label = text(ar ? "ليد جديدة" : "New lead", 15, 0xCCFFFFFF, false);
+        TextView label = text(callback
+                ? (ar ? "معاد المكالمة جه" : "Time to call back")
+                : (ar ? "ليد جديدة" : "New lead"), 15, 0xCCFFFFFF, false);
         label.setLetterSpacing(0.08f);
         col.addView(label);
 
@@ -160,9 +197,13 @@ public class IncomingLeadActivity extends Activity {
         oLp.topMargin = dp(12);
         col.addView(open, oLp);
 
-        Button later = button(ar ? "بعدين" : "Later", Color.TRANSPARENT, 0xCCFFFFFF, 16);
+        String laterLabel = callback
+                ? (ar ? "فكّرني بعد " + Alerts.SNOOZE_CALLBACK_MIN + " دقايق" : "Remind me in " + Alerts.SNOOZE_CALLBACK_MIN + " min")
+                : (ar ? "بعدين" : "Later");
+        Button later = button(laterLabel, Color.TRANSPARENT, 0xCCFFFFFF, 16);
         later.setOnClickListener(v -> {
-            if (leadId != null) Alerts.snooze(this, leadId);
+            if (lead.isCallback()) Alerts.snoozeCallback(this, lead);
+            else Alerts.snooze(this, lead);
             finish();
         });
         LinearLayout.LayoutParams lLp = buttonLp(48);
@@ -174,8 +215,7 @@ public class IncomingLeadActivity extends Activity {
 
     private void go(String action) {
         Alerts.stopRing(this);
-        Intent i = Alerts.mainIntent(this, action,
-                new Alerts.Lead(leadId == null ? "" : leadId, "", phone, "", ""));
+        Intent i = Alerts.mainIntent(this, action, lead);
         // From the lock screen, ask to unlock first so the app and the dialer
         // can open; the dialer itself shows over the keyguard either way.
         KeyguardManager km = getSystemService(KeyguardManager.class);

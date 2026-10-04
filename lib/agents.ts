@@ -95,9 +95,18 @@ export async function agentFromRequest(req: NextRequest, db: DB = supabaseAdmin(
   const { data: agent } = await db.from("agents").select(AGENT_COLUMNS).eq("id", session.agent_id).maybeSingle();
   if (!agent || !(agent as Agent).active) return null;
 
-  // Cheap bookkeeping, at most once a minute per device.
+  // Cheap bookkeeping, at most once a minute per device. The Android app also
+  // reports whether the phone is set up to ring (x-device, see Diag.java), so
+  // the dashboard can show a phone that will not ring before a lead is missed.
   if (Date.now() - Date.parse(String(session.last_used_at)) > 60_000) {
-    await db.from("agent_sessions").update({ last_used_at: new Date().toISOString() }).eq("token_hash", hash);
+    const device = req.headers.get("x-device");
+    await db
+      .from("agent_sessions")
+      .update({
+        last_used_at: new Date().toISOString(),
+        ...(device && device.startsWith("{") ? { device: device.slice(0, 600) } : {}),
+      })
+      .eq("token_hash", hash);
   }
   return agent as Agent;
 }

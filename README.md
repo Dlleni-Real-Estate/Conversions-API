@@ -86,7 +86,9 @@ Meta ──► /api/agent/tick (every minute) ──► route_lead() ──► i
        │
        └─► "What happened?" answered / no answer / phone off
               → qualified / not qualified (+ reason) / follow-up / later stages
-              → note + "call again at…"   ──► same pipeline: timeline, quality, CAPI to Meta
+              → note + "call again in 15 / 30 min, 1 / 2 h…"   ──► same pipeline: timeline, quality, CAPI to Meta
+                    │
+                    └─► at that minute the phone rings again, like a call, even with the app closed
 ```
 
 **Admin (dashboard → Agents & routing)**
@@ -115,7 +117,11 @@ active in its rule) falls back to the 8X push, so it is still called. A campaign
 
 **Agent app.** New / Follow-up / All tabs; the lead page shows every form answer in the form's own
 words, the source, and the timeline (calls, hand-offs, stages, notes). After a call the result
-sheet takes three taps: *answered → qualified* or *no answer → remind me in an hour*. Stages are the
+sheet takes three taps: *answered → qualified* or *no answer → call again in 30 minutes*. At that
+minute the phone **rings again like a call** (up to three times, five minutes apart, or "in 10 min"),
+so a callback is never just a notification that scrolls away. The app's **Phone setup** screen walks
+each agent through what their phone needs to ring with the app closed, and the Agents tab shows,
+per agent, which of those steps their phone is still missing. Stages are the
 same pipeline as everywhere else, plus **Phone off** (`unreachable`, event `Unreachable`,
 negative like `NoAnswer`). Remove it from the funnel screen in Events Manager too.
 
@@ -326,7 +332,7 @@ The agent app's own endpoints take `x-agent-token` (issued by `POST /api/agent/l
 |---|---|
 | `POST /api/agent/login` · `/logout` | `{username, password}` → `{token, agent}` |
 | `GET/POST /api/agent/me` | the agent · `{available}` on/off shift |
-| `GET /api/agent/inbox` | what the phone polls: leads to ring for, follow-ups due |
+| `GET /api/agent/inbox` | what the phone polls: leads to ring for, callbacks due, the next callback to set an alarm for |
 | `GET /api/agent/leads` | `?view=new|follow|all&q=`, the agent's own leads only |
-| `GET/POST /api/agent/leads/:id` | detail + timeline · `{action: open|call|outcome|note}` |
+| `GET/POST /api/agent/leads/:id` | detail + timeline · `{action: open|call|outcome|note|snooze}` |
 | `POST /api/agent/test-lead` | a test lead for the signed-in agent (10 an hour) |

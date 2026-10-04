@@ -57,6 +57,7 @@ export async function GET(req: NextRequest, ctx: Ctx) {
  *   outcome { status, note?, follow_up_at?, deal_value? }
  *                              what happened on the call
  *   note { body }              a note on its own
+ *   snooze { minutes }         move the follow-up this many minutes from now
  */
 export async function POST(req: NextRequest, ctx: Ctx) {
   const db = supabaseAdmin();
@@ -89,6 +90,18 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       .eq("lead_id", id);
     await db.from("lead_notes").insert({ lead_id: id, kind: "call", body: channel, author: agent.name });
     return NextResponse.json({ ok: true });
+  }
+
+  // "Remind me in 10 min" on a callback ring: the follow-up moves, so the
+  // list, the phone's next alarm and any other phone all agree.
+  if (action === "snooze") {
+    const minutes = Math.round(Number(body?.minutes));
+    if (!Number.isFinite(minutes) || minutes < 1 || minutes > 24 * 60) {
+      return NextResponse.json({ ok: false, error: "minutes must be 1-1440" }, { status: 400 });
+    }
+    const at = new Date(Date.now() + minutes * 60_000).toISOString();
+    await db.from("leads").update({ follow_up_at: at }).eq("lead_id", id);
+    return NextResponse.json({ ok: true, follow_up_at: at });
   }
 
   if (action === "note") {

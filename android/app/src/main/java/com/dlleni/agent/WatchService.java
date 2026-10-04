@@ -7,6 +7,8 @@ import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
+import android.net.ConnectivityManager;
+import android.net.Network;
 import android.os.Build;
 import android.os.Handler;
 import android.os.HandlerThread;
@@ -27,13 +29,19 @@ import java.util.Set;
  * "On shift": the app keeps working with the screen off and the app closed.
  *
  * A foreground service (so Android lets it live, with its own quiet
- * notification) that asks the server every 15 seconds whether a lead is
- * waiting for this agent. A waiting lead rings, call-style, until it is
- * opened. It holds a partial wake lock while on shift, so the phone's CPU does
- * not doze between checks; switching "off shift" in the app stops all of it.
+ * notification) that asks the server every 15 seconds what should ring: new
+ * leads nobody opened yet, and callbacks whose time has come. It holds a
+ * partial wake lock while on shift, so the phone's CPU does not doze between
+ * checks; switching "off shift" in the app stops all of it.
+ *
+ * If a phone maker kills it anyway, three things bring it back: a restart
+ * alarm when the app is swiped away, the watchdog alarm (see Reminders), and
+ * the next time the app is opened.
  */
 public class WatchService extends Service {
     static final String ACTION_POLL_NOW = "com.dlleni.agent.POLL_NOW";
+    static final String ACTION_CALLBACK = "com.dlleni.agent.RING_CALLBACK";
+    static final String ACTION_TEST_RING = "com.dlleni.agent.RING_TEST";
     private static final long POLL_MS = 15_000;
     private static final long RETRY_MS = 20_000;
 
@@ -42,30 +50,28 @@ public class WatchService extends Service {
     private HandlerThread thread;
     private Handler handler;
     private PowerManager.WakeLock wakeLock;
-    private final Set<String> followNotified = new HashSet<>();
+    private ConnectivityManager.NetworkCallback netCallback;
+    private volatile boolean offline = false;
+    private volatile boolean testing = false;
     private final Runnable poll = this::poll;
 
     static void start(Context c) {
         if (!Prefs.shouldWatch(c)) return;
-        Intent i = new Intent(c, WatchService.class);
+        deliver(c, new Intent(c, WatchService.class));
+    }
+
+    /** Start (or wake) the service with an instruction. */
+    static void deliver(Context c, Intent i) {
         try {
             c.startForegroundService(i);
         } catch (RuntimeException notAllowedNow) {
-            // Android refuses a background start on some paths; the next time
-            // the app is opened starts it again.
+            // Android refuses a background start on some paths; the watchdog
+            // alarm or the next app open starts it again.
         }
     }
 
     static void pollNow(Context c) {
-        if (!running) {
-            start(c);
-            return;
-        }
-        try {
-            c.startService(new Intent(c, WatchService.class).setAction(ACTION_POLL_NOW));
-        } catch (RuntimeException ignored) {
-            // Not allowed from the background; the regular poll is 15s away.
-        }
+        deliver(c, new Intent(c, WatchService.class).setAction(ACTION_POLL_NOW));
     }
 
     static void stop(Context c) {
@@ -76,13 +82,7 @@ public class WatchService extends Service {
     public void onCreate() {
         super.onCreate();
         Alerts.ensureChannels(this);
-        try {
-            if (Build.VERSION.SDK_INT >= 34) {
-                startForeground(Alerts.ID_SHIFT, Alerts.shift(this, status(null, 0)), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
-            } else {
-                startForeground(Alerts.ID_SHIFT, Alerts.shift(this, status(null, 0)));
-            }
-        } catch (RuntimeException refused) {
+        if (!goForeground()) {
             stopSelf();
             return;
         }
@@ -95,16 +95,67 @@ public class WatchService extends Service {
         thread = new HandlerThread("lead-watch");
         thread.start();
         handler = new Handler(thread.getLooper());
-        handler.post(poll);
+        listenForNetwork();
+        // Off shift the service only ever runs for a test ring.
+        if (Prefs.shouldWatch(this)) handler.post(poll);
+    }
+
+    private boolean goForeground() {
+        try {
+            if (Build.VERSION.SDK_INT >= 34) {
+                startForeground(Alerts.ID_SHIFT, Alerts.shift(this, status(null, 0, 0)), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+            } else {
+                startForeground(Alerts.ID_SHIFT, Alerts.shift(this, status(null, 0, 0)));
+            }
+            return true;
+        } catch (RuntimeException refused) {
+            return false;
+        }
+    }
+
+    /** Back online after a gap: check at once instead of waiting out the retry. */
+    private void listenForNetwork() {
+        ConnectivityManager cm = getSystemService(ConnectivityManager.class);
+        if (cm == null) return;
+        netCallback = new ConnectivityManager.NetworkCallback() {
+            @Override
+            public void onAvailable(Network network) {
+                if (offline && handler != null) {
+                    handler.removeCallbacks(poll);
+                    handler.postDelayed(poll, 1500);
+                }
+            }
+        };
+        try {
+            cm.registerDefaultNetworkCallback(netCallback);
+        } catch (RuntimeException ignored) {
+            netCallback = null;
+        }
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        if (!Prefs.shouldWatch(this)) {
+        String action = intent == null ? null : intent.getAction();
+        // Every start must be answered with startForeground, or Android ends the app.
+        goForeground();
+        if (handler == null) {
             stopSelf();
             return START_NOT_STICKY;
         }
-        if (handler != null && intent != null && ACTION_POLL_NOW.equals(intent.getAction())) {
+
+        if (ACTION_TEST_RING.equals(action)) {
+            testing = true;
+            handler.post(this::ringTest);
+            return Prefs.shouldWatch(this) ? START_STICKY : START_NOT_STICKY;
+        }
+        if (!Prefs.shouldWatch(this)) {
+            if (!testing) stopSelf();
+            return START_NOT_STICKY;
+        }
+        if (ACTION_CALLBACK.equals(action) && intent != null) {
+            Alerts.Lead lead = Alerts.Lead.fromExtras(intent);
+            handler.post(() -> ringCallback(lead));
+        } else if (ACTION_POLL_NOW.equals(action)) {
             handler.removeCallbacks(poll);
             handler.post(poll);
         }
@@ -113,23 +164,32 @@ public class WatchService extends Service {
 
     private void poll() {
         if (!Prefs.shouldWatch(this)) {
-            stopSelf();
+            if (!testing) stopSelf();
             return;
         }
         // Held across the gap to the next check, released if we stop.
         if (wakeLock != null) wakeLock.acquire(POLL_MS + 60_000);
         long next = POLL_MS;
         try {
-            handle(Api.get(this, "/api/agent/inbox"));
+            JSONObject inbox = Api.get(this, "/api/agent/inbox");
+            offline = false;
+            Prefs.markCheck(this, null);
+            handle(inbox);
         } catch (Api.Unauthorized u) {
             Prefs.clearSession(this);
+            Reminders.cancelAll(this);
             Alerts.signedOut(this);
             stopSelf();
             return;
-        } catch (Exception offline) {
-            update(status(arabic() ? "مفيش اتصال بالإنترنت، بيحاول تاني…" : "No connection, retrying…", 0));
+        } catch (Exception e) {
+            offline = true;
+            Prefs.markCheck(this, String.valueOf(e.getMessage()));
+            update(status(arabic() ? "مفيش اتصال بالإنترنت، بيحاول تاني…" : "No connection, retrying…", 0, 0));
             next = RETRY_MS;
         }
+        // Pushed five minutes ahead on every check: it only fires if the
+        // checks stop, i.e. if this service was killed.
+        Reminders.armWatchdog(this);
         if (handler != null) handler.postDelayed(poll, next);
     }
 
@@ -145,51 +205,94 @@ public class WatchService extends Service {
 
         long now = System.currentTimeMillis();
         JSONArray ring = j.optJSONArray("ring");
-        int waiting = ring == null ? 0 : ring.length();
+        JSONArray due = j.optJSONArray("due");
+        int waitingNew = ring == null ? 0 : ring.length();
+        int waitingCallbacks = due == null ? 0 : due.length();
 
-        // The lead that is ringing was opened somewhere else: stop.
-        String ringing = Alerts.ringingLead;
-        if (ringing != null && !"test".equals(ringing) && !contains(ring, ringing)) Alerts.stopRing(this);
+        Alerts.Lead[] fresh = new Alerts.Lead[waitingNew];
+        Alerts.Lead[] callbacks = new Alerts.Lead[waitingCallbacks];
+        Set<String> live = new HashSet<>();
+        for (int i = 0; i < waitingNew; i++) {
+            JSONObject l = ring.getJSONObject(i);
+            fresh[i] = new Alerts.Lead(l.getString("lead_id"), l.optString("name", ""), l.optString("phone", ""),
+                    l.optString("campaign", ""), answers(l.optJSONArray("answers")), Alerts.Lead.NEW,
+                    l.optLong("assigned_ms", 0), "");
+            live.add(fresh[i].key());
+        }
+        for (int i = 0; i < waitingCallbacks; i++) {
+            callbacks[i] = Alerts.Lead.callback(this, due.getJSONObject(i));
+            live.add(callbacks[i].key());
+        }
 
-        // Ring for the longest-waiting lead that is not snoozed and has not
-        // rung in the last few minutes. One ring at a time; the others are
-        // counted on it.
-        if (ring != null) {
-            for (int i = 0; i < ring.length(); i++) {
-                JSONObject l = ring.getJSONObject(i);
-                String id = l.getString("lead_id");
-                Long snooze = Alerts.snoozedUntil.get(id);
-                if (snooze != null && snooze > now) continue;
-                if (id.equals(Alerts.ringingLead) && now - Alerts.ringingSince < Alerts.RING_MS) break;
-                Long last = Alerts.lastRing.get(id);
-                if (last != null && now - last < Alerts.RE_RING_MS) continue;
-                Alerts.ring(this, new Alerts.Lead(id, l.optString("name", ""), l.optString("phone", ""),
-                        l.optString("campaign", ""), answers(l.optJSONArray("answers"))), waiting - 1);
+        // What is up on the phone was dealt with somewhere else (opened, called,
+        // snoozed on another phone, or handed to another agent): take it down.
+        Alerts.Lead shown = Alerts.current;
+        if (shown != null && !shown.isTest() && !live.contains(shown.key())) Alerts.stopRing(this);
+        shown = Alerts.current;
+        String ringingKey = Ringer.isRinging() && shown != null ? shown.key() : null;
+
+        // The next thing to ring: a new lead first - speed to lead - then a
+        // callback. Snoozed ones wait; one that just rang waits its turn.
+        Alerts.Lead pick = null;
+        for (Alerts.Lead l : fresh) {
+            if (l.key().equals(ringingKey) || snoozed(l, now)) continue;
+            Long last = Alerts.lastRing.get(l.key());
+            if (last != null && now - last < Alerts.RE_RING_MS) continue;
+            pick = l;
+            break;
+        }
+        if (pick == null) {
+            for (Alerts.Lead l : callbacks) {
+                if (l.key().equals(ringingKey) || snoozed(l, now)) continue;
+                Integer rang = Alerts.rounds.get(l.key());
+                if (rang != null && rang >= Alerts.CALLBACK_ROUNDS) continue;
+                Long last = Alerts.lastRing.get(l.key());
+                if (last != null && now - last < Alerts.CALLBACK_RE_RING_MS) continue;
+                pick = l;
                 break;
             }
         }
-
-        // Follow-ups whose time has come: one reminder each.
-        JSONArray due = j.optJSONArray("due");
-        if (due != null) {
-            for (int i = 0; i < due.length(); i++) {
-                JSONObject l = due.getJSONObject(i);
-                String key = l.optString("lead_id") + "@" + l.optString("follow_up_at");
-                if (followNotified.add(key)) {
-                    Alerts.followUp(this, l.optString("lead_id"), l.optString("name", ""), l.optString("phone", ""));
-                }
-            }
+        if (pick != null) {
+            boolean busy = ringingKey != null;
+            // A new lead interrupts a callback or a test ring; nothing else
+            // interrupts - the next one rings when this minute is up.
+            boolean interrupt = busy && !pick.isCallback() && shown != null && (shown.isCallback() || shown.isTest());
+            if (!busy || interrupt) Alerts.ring(this, pick, pick.isCallback() ? 0 : waitingNew - 1);
         }
 
-        update(status(null, waiting));
+        Reminders.applyUpcoming(this, j.optJSONArray("upcoming"));
+        update(status(null, waitingNew, waitingCallbacks));
     }
 
-    private static boolean contains(JSONArray ring, String id) {
-        if (ring == null) return false;
-        for (int i = 0; i < ring.length(); i++) {
-            if (id.equals(ring.optJSONObject(i) == null ? null : ring.optJSONObject(i).optString("lead_id"))) return true;
-        }
-        return false;
+    private static boolean snoozed(Alerts.Lead l, long now) {
+        Long until = Alerts.snoozedUntil.get(l.key());
+        return until != null && until > now;
+    }
+
+    /** The callback alarm fired: ring at once, then let a check confirm it is still due. */
+    private void ringCallback(Alerts.Lead lead) {
+        long now = System.currentTimeMillis();
+        Integer rang = Alerts.rounds.get(lead.key());
+        boolean rangOut = rang != null && rang >= Alerts.CALLBACK_ROUNDS;
+        Alerts.Lead shown = Alerts.current;
+        boolean newLeadRinging = Ringer.isRinging() && shown != null && !shown.isCallback() && !shown.isTest();
+        boolean alreadyRinging = Ringer.isRinging() && shown != null && shown.key().equals(lead.key());
+        if (!snoozed(lead, now) && !rangOut && !newLeadRinging && !alreadyRinging) Alerts.ring(this, lead, 0);
+        handler.removeCallbacks(poll);
+        handler.postDelayed(poll, 3000);
+    }
+
+    private void ringTest() {
+        boolean ar = arabic();
+        Alerts.ring(this, new Alerts.Lead("test",
+                ar ? "عميل تجريبي" : "Test customer", "201000000000",
+                ar ? "اختبار الرنة" : "Ring test",
+                ar ? "الميزانية: ٥٠٠ ألف\nنوع الوحدة: شقة" : "Budget: 500k\nUnit: apartment",
+                Alerts.Lead.TEST, System.currentTimeMillis(), ""), 0);
+        handler.postDelayed(() -> {
+            testing = false;
+            if (!Prefs.shouldWatch(this)) stopSelf();
+        }, Alerts.RING_MS + 2000);
     }
 
     private static String answers(JSONArray a) {
@@ -208,11 +311,13 @@ public class WatchService extends Service {
         return Alerts.arabic(this);
     }
 
-    private String status(String problem, int waiting) {
+    private String status(String problem, int waitingNew, int callbacks) {
         if (problem != null) return problem;
+        boolean ar = arabic();
+        if (waitingNew > 0) return ar ? "🔔 " + waitingNew + " ليد مستنية مكالمتك" : "🔔 " + waitingNew + " lead(s) waiting for your call";
+        if (callbacks > 0) return ar ? "⏰ " + callbacks + " معاد مكالمة جه وقته" : "⏰ " + callbacks + " callback(s) due";
         String time = new SimpleDateFormat("h:mm a", Locale.US).format(new Date());
-        if (waiting > 0) return arabic() ? "🔔 " + waiting + " ليد مستنية مكالمتك" : "🔔 " + waiting + " lead(s) waiting for your call";
-        return arabic() ? "شغّال · آخر تحديث " + time : "Watching · last check " + time;
+        return ar ? "شغّال · آخر تحديث " + time : "Watching · last check " + time;
     }
 
     private void update(String text) {
@@ -223,7 +328,9 @@ public class WatchService extends Service {
     @Override
     public void onTaskRemoved(Intent rootIntent) {
         super.onTaskRemoved(rootIntent);
+        // Swiped away from recents. Some phones kill the whole app right after.
         scheduleRestart();
+        Reminders.armWatchdog(this);
     }
 
     @Override
@@ -232,9 +339,21 @@ public class WatchService extends Service {
         if (handler != null) handler.removeCallbacksAndMessages(null);
         if (thread != null) thread.quitSafely();
         if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
-        // Killed while the agent is still on shift (memory, an OEM battery
-        // manager): come back on our own.
-        if (Prefs.shouldWatch(this)) scheduleRestart();
+        if (netCallback != null) {
+            ConnectivityManager cm = getSystemService(ConnectivityManager.class);
+            try {
+                if (cm != null) cm.unregisterNetworkCallback(netCallback);
+            } catch (RuntimeException ignored) {
+                // Already gone.
+            }
+        }
+        if (Prefs.shouldWatch(this)) {
+            // Killed while the agent is still on shift (memory, an OEM battery
+            // manager): come back on our own.
+            scheduleRestart();
+        } else {
+            Alerts.stopRing(this);
+        }
         super.onDestroy();
     }
 
@@ -244,6 +363,14 @@ public class WatchService extends Service {
         if (am == null) return;
         PendingIntent pi = PendingIntent.getForegroundService(this, 7, new Intent(this, WatchService.class),
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        try {
+            if (Diag.exactAlarmsOk(this)) {
+                am.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, SystemClock.elapsedRealtime() + 5_000, pi);
+                return;
+            }
+        } catch (SecurityException ignored) {
+            // Inexact below.
+        }
         am.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, SystemClock.elapsedRealtime() + 10_000, pi);
     }
 

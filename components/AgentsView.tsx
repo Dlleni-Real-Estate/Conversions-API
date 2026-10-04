@@ -248,7 +248,17 @@ function AgentsCard({
               <p className="mt-2 text-[11px] text-slate-400">
                 {a.last_seen_at ? `${t.agLastSeen}: ${fmtAgo(a.last_seen_at, lang)}` : t.agNever}
                 {a.app_version ? ` · v${a.app_version}` : ""}
+                {a.phone_setup ? ` · ${a.phone_setup.maker} ${a.phone_setup.model}` : ""}
               </p>
+              {a.phone_setup && (
+                a.phone_setup.issues.length === 0 ? (
+                  <p className="mt-1 text-[11px] font-medium text-emerald-700">✓ {t.agPhoneReady}</p>
+                ) : (
+                  <p className="mt-1 rounded-md bg-amber-50 px-2 py-1 text-[11px] leading-snug text-amber-800">
+                    ⚠ {t.agPhoneIssues} {a.phone_setup.issues.map((i) => t.agIssue[i]).join(lang === "ar" ? "، " : ", ")}
+                  </p>
+                )
+              )}
 
               <div className="mt-3 flex flex-wrap gap-2 text-xs">
                 <button
