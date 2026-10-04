@@ -9,7 +9,7 @@ import type { Lead } from "./types";
 
 type Note = {
   id: string;
-  kind: "note" | "stage";
+  kind: "note" | "stage" | "call" | "assign";
   body: string | null;
   from_status: Status | null;
   to_status: Status | null;
@@ -31,14 +31,45 @@ export default function LeadPanel({
   dictionary,
   pw,
   onClose,
+  onChanged,
 }: {
   lead: Lead;
   dictionary: FormDictionary | null;
   pw: string;
   onClose: () => void;
+  onChanged?: () => void;
 }) {
   const { t, s, sHint, lang, locale } = useLang();
   const [notes, setNotes] = useState<Note[]>([]);
+  const [agents, setAgents] = useState<{ id: string; name: string; active: boolean }[]>([]);
+  const [assignErr, setAssignErr] = useState<string | null>(null);
+
+  // The agent list, for moving this lead by hand. Read once per opened lead;
+  // no agents at all means the section has nothing to offer and stays hidden.
+  useEffect(() => {
+    fetch("/api/admin/agents", { headers: { "x-app-password": pw } })
+      .then((r) => r.json())
+      .then((j) => setAgents((j.agents || []).filter((a: { active: boolean }) => a.active)))
+      .catch(() => setAgents([]));
+  }, [pw]);
+
+  const assign = async (agentId: string | null) => {
+    setAssignErr(null);
+    const res = await fetch("/api/admin/assign", {
+      method: "POST",
+      headers: { "x-app-password": pw, "content-type": "application/json" },
+      body: JSON.stringify({ lead_id: lead.lead_id, agent_id: agentId }),
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok || j.ok === false) setAssignErr(String(j.error || res.status));
+    else {
+      onChanged?.();
+      onClose();
+    }
+  };
+
+  const minutes = (a?: string | null, b?: string | null) =>
+    a && b ? Math.max(0, Math.round((Date.parse(b) - Date.parse(a)) / 60_000)) : null;
 
   const loadNotes = useCallback(async () => {
     const res = await fetch(`/api/notes?lead_id=${lead.lead_id}`, { headers: { "x-app-password": pw } });
@@ -116,6 +147,55 @@ export default function LeadPanel({
             {sHint(lead.status) && <p className="mt-2 text-xs text-slate-400">{sHint(lead.status)}</p>}
           </div>
 
+          {/* The agent app's side of this lead: who holds it, how fast they
+              called, and a way to move it by hand. */}
+          {(lead.agent_id || agents.length > 0) && (
+            <div className="rounded-xl border border-brand-200 bg-brand-50/50 px-3 py-3">
+              <h3 className="text-[11px] font-medium uppercase tracking-wide text-brand-700">{t.appTitle2}</h3>
+              {lead.agent_id && (
+                <p className="mt-1.5 text-sm text-slate-700">
+                  <span className="font-semibold" dir="auto">{agents.find((a) => a.id === lead.agent_id)?.name || lead.owner || "—"}</span>
+                  {lead.assigned_at && (
+                    <span className="text-slate-500"> · {t.assignedAgo} {fmtAgo(lead.assigned_at, lang)}</span>
+                  )}
+                  <span className="text-slate-500">
+                    {" · "}
+                    {lead.first_call_at
+                      ? `${t.calledAfter} ${minutes(lead.assigned_at, lead.first_call_at)}m`
+                      : t.notCalledYet}
+                  </span>
+                  {lead.follow_up_at && (
+                    <span className="text-slate-500"> · {t.followUpAt}: {fmtDate(lead.follow_up_at, locale)}</span>
+                  )}
+                </p>
+              )}
+              {agents.length > 0 && (
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <select
+                    value=""
+                    onChange={(e) => e.target.value && assign(e.target.value)}
+                    className="tap rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs"
+                  >
+                    <option value="">{t.reassignTo}</option>
+                    {agents
+                      .filter((a) => a.id !== lead.agent_id)
+                      .map((a) => (
+                        <option key={a.id} value={a.id}>
+                          {a.name}
+                        </option>
+                      ))}
+                  </select>
+                  {lead.agent_id && (
+                    <button onClick={() => assign(null)} className="tap rounded-lg border border-slate-300 bg-white px-2.5 text-xs text-slate-600">
+                      {t.unassign}
+                    </button>
+                  )}
+                </div>
+              )}
+              {assignErr && <p className="mt-1.5 text-xs text-red-600">{assignErr}</p>}
+            </div>
+          )}
+
           {/* The form, in the words the customer actually read. Meta hands back
               machine keys; these come from the form definition, untranslated. */}
           {answers.length > 0 && (
@@ -172,7 +252,24 @@ export default function LeadPanel({
                         <span className="font-medium">{s(n.to_status)}</span>
                       </div>
                     )}
-                    {n.body && <p dir="auto" className="mt-0.5 whitespace-pre-wrap text-sm text-slate-700">{n.body}</p>}
+                    {n.kind === "call" && (
+                      <div className="mt-0.5 text-sm text-slate-700">
+                        {n.body === "whatsapp" ? `💬 ${t.whatsapp}` : `📞 ${t.call}`}
+                        {n.author && <span dir="auto" className="text-slate-500"> · {n.author}</span>}
+                      </div>
+                    )}
+                    {n.kind === "assign" && (
+                      <div className="mt-0.5 text-sm text-slate-700">
+                        → <span dir="auto" className="font-medium">{n.body || "—"}</span>
+                        <span className="text-slate-400"> · {n.author}</span>
+                      </div>
+                    )}
+                    {n.body && (n.kind === "note" || n.kind === "stage") && (
+                      <p dir="auto" className="mt-0.5 whitespace-pre-wrap text-sm text-slate-700">{n.body}</p>
+                    )}
+                    {n.author && (n.kind === "note" || n.kind === "stage") && (
+                      <p dir="auto" className="text-[11px] text-slate-400">{n.author}</p>
+                    )}
                   </li>
                 ))}
               </ol>

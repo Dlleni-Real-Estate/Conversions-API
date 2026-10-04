@@ -9,13 +9,15 @@ export const dynamic = "force-dynamic";
 
 const LEAD_COLUMNS =
   "lead_id,full_name,phone,email,status,status_at,notes,owner,deal_value,submitted_at," +
-  "campaign_id,campaign_name,adset_id,adset_name,ad_id,ad_name,form_name,platform,raw_fields,quality_score";
+  "campaign_id,campaign_name,adset_id,adset_name,ad_id,ad_name,form_name,platform,raw_fields,quality_score," +
+  "agent_id,assigned_at,acked_at,first_call_at,call_count,follow_up_at";
 
 /** Still worth a phone call — the default working view. */
 const OPEN_STATUSES = [
   "new",
   "contacted",
   "no_answer",
+  "unreachable",
   "qualified",
   "meeting_booked",
   "meeting_done",

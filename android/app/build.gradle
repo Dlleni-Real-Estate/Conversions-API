@@ -1,0 +1,54 @@
+plugins {
+    id "com.android.application"
+}
+
+// CI stamps every build with its run number, so each APK installs over the
+// last one as a newer version.
+def runNumber = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInteger()
+
+// A stable signing key lives in repository secrets (see android/README.md).
+// Without one the build is signed with the runner's throwaway debug key: fine
+// for a first test, but each such build is a different signer, so it cannot
+// be installed over the previous one.
+def keystorePath = System.getenv("ANDROID_KEYSTORE_PATH")
+
+android {
+    namespace "com.dlleni.agent"
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.dlleni.agent"
+        minSdk 26
+        targetSdk 34
+        versionCode runNumber
+        versionName "1.0.${runNumber}"
+    }
+
+    signingConfigs {
+        release {
+            if (keystorePath) {
+                storeFile file(keystorePath)
+                storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias System.getenv("ANDROID_KEY_ALIAS")
+                keyPassword System.getenv("ANDROID_KEY_PASSWORD")
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig keystorePath ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    lint {
+        checkReleaseBuilds false
+        abortOnError false
+    }
+}

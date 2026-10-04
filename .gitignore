@@ -11,3 +11,10 @@ _to_delete/
 
 .commitmsg.txt
 _to_delete/
+
+# Android build output
+android/.gradle
+android/build
+android/app/build
+android/local.properties
+*.jks

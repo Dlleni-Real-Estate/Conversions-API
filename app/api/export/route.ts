@@ -68,6 +68,7 @@ const OPEN_STATUSES = [
   "new",
   "contacted",
   "no_answer",
+  "unreachable",
   "qualified",
   "meeting_booked",
   "meeting_done",

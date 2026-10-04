@@ -72,6 +72,64 @@ There is no "sync now" button. Leads arrive on their own every 10 minutes; **Ref
 
 ---
 
+## Agents & lead routing
+
+For the campaigns the admin picks, leads skip 8X: they are handed straight to **agents**
+who work them in the **agent app** (Android, `android/`). The phone rings like an incoming
+call the moment a lead is theirs.
+
+```
+Meta ──► /api/agent/tick (every minute) ──► route_lead() ──► inbox ──► the phone rings
+          routed campaigns only               % split      polled every 15 s
+                                                             │
+     call ◄── "Call now" ◄── full-screen ring over the lock screen
+       │
+       └─► "What happened?" answered / no answer / phone off
+              → qualified / not qualified (+ reason) / follow-up / later stages
+              → note + "call again at…"   ──► same pipeline: timeline, quality, CAPI to Meta
+```
+
+**Admin (dashboard → Agents & routing)**
+
+- **Agents.** Each has their own username and password. *Disable* signs them out
+  everywhere on their next request; *New password* does the same.
+- **Routing per campaign.** Pick the agents and their shares, which must add up to 100%
+  (70/30, 50/50, …). The next lead goes to whoever is furthest below their share, so 70/30
+  is exactly 7 in every 10, interleaved. It is not a coin toss that drifts. Saving a rule
+  restarts the counts.
+- **Who is eligible.** First the agents who are *on shift* and whose app checked in during the
+  last 15 minutes, then anyone on shift, then anyone active. A lead always lands somewhere,
+  but never on a phone that is off while a phone that is on is waiting. An agent coming back on
+  shift rejoins at their share instead of being owed every lead they missed.
+- **Speed rule (optional).** "If nobody calls within N minutes, move the lead to another agent
+  on shift." At most two moves per lead.
+- **Switching a campaign on** routes leads from that moment. Older unworked leads are handed
+  out only if *backfill* is ticked (last 72 hours, status *New*, nobody on them).
+- **Manual move.** In any lead's panel, *Move to agent…*, or take it off the app.
+
+**What changes for 8X.** A lead with an agent is worked here, so the 8X mirror ignores it and the
+8X push never sends it. A routed lead that nobody could take within 15 minutes (no agent
+active in its rule) falls back to the 8X push, so it is still called. A campaign whose form is
+*also* connected to 8X's own Facebook integration reaches 8X regardless. Turn that form off in
+8X, or two people call the same customer.
+
+**Agent app.** New / Follow-up / All tabs; the lead page shows every form answer in the form's own
+words, the source, and the timeline (calls, hand-offs, stages, notes). After a call the result
+sheet takes three taps: *answered → qualified* or *no answer → remind me in an hour*. Stages are the
+same pipeline as everywhere else, plus **Phone off** (`unreachable`, event `Unreachable`,
+negative like `NoAnswer`). Remove it from the funnel screen in Events Manager too.
+
+Speed is measured on the agent's own phone: `assigned_at → first_call_at`, shown per agent as the
+median and the share called within 5 minutes.
+
+**Scheduling.** Add the minute tick to pg_cron next to the sync:
+
+```sql
+select cron.schedule('agent-tick', '* * * * *', $$select public.call_app('/api/agent/tick')$$);
+```
+
+With no routed campaign it returns after one query.
+
 ## The form is shown in its own words
 
 Meta's lead payload is machine keys, not the text the customer read:
@@ -208,7 +266,12 @@ app/
   api/feedback/             stage change → timeline → CAPI
   api/notes/                lead notes timeline
   api/capi/replay/          retry failed events
+  api/agent/                the agent app's API + the one-minute routing tick
+  api/admin/                agents, routing rules, manual assignment
+  agent/                    the agent app's screens (served to the Android shell)
 components/
+  AgentsView.tsx            agents, routing shares, app download
+  agent/AgentApp.tsx        the agent app: list, lead, after-call sheet, settings
   LangProvider.tsx          EN/AR switch, direction, stage names
   LeadsView.tsx             the working list — inline stage + inline notes
   LeadPanel.tsx             one lead: details, stages, timeline
@@ -223,7 +286,12 @@ lib/
   capi.ts                   build and send events
   stages.ts                 the pipeline — edit here
   supabase.ts / auth.ts
-supabase/migrations/        schema
+  agents.ts                 agent passwords, tokens, presence
+  routing.ts                hand out waiting leads, speed rule, backfill
+  outcome.ts                one stage move: store, timeline, quality, CAPI
+  ingest.ts                 one Meta lead -> one row, for sync and tick alike
+supabase/migrations/        schema (0014: agents and routing; route_lead() does the hand-out)
+android/                    the agent app's native shell, see android/README.md
 ```
 
 ## API
@@ -238,5 +306,19 @@ supabase/migrations/        schema
 | `POST /api/feedback` | `{lead_id, status, note?, deal_value?}` |
 | `GET/POST /api/notes` | `?lead_id=` · `{lead_id, body}` |
 | `GET /api/capi/replay` | retry failed events |
+| `GET/POST /api/admin/agents` | list with speed stats · `{action: create|update|password|signout}` |
+| `GET/POST /api/admin/routing` | rules + campaign options · `{campaign_id, enabled, routes:[{agent_id, weight}], reassign_after_min?, backfill_hours?}` |
+| `POST /api/admin/assign` | `{lead_id, agent_id|null}` move one lead by hand |
+| `GET /api/agent/tick` | cron, every minute: pull routed campaigns, route, apply the speed rule |
 
-Everything is behind `x-app-password` or `Authorization: Bearer $CRON_SECRET`.
+Everything above is behind `x-app-password` or `Authorization: Bearer $CRON_SECRET`.
+
+The agent app's own endpoints take `x-agent-token` (issued by `POST /api/agent/login`):
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /api/agent/login` · `/logout` | `{username, password}` → `{token, agent}` |
+| `GET/POST /api/agent/me` | the agent · `{available}` on/off shift |
+| `GET /api/agent/inbox` | what the phone polls: leads to ring for, follow-ups due |
+| `GET /api/agent/leads` | `?view=new|follow|all&q=`, the agent's own leads only |
+| `GET/POST /api/agent/leads/:id` | detail + timeline · `{action: open|call|outcome|note}` |

@@ -9,6 +9,7 @@ import HealthPanel from "@/components/HealthPanel";
 import AdAccounts from "@/components/AdAccounts";
 import AuditPanel from "@/components/AuditPanel";
 import TeamView, { type TeamData } from "@/components/TeamView";
+import AgentsView from "@/components/AgentsView";
 import { LangProvider, LangSwitch, useLang } from "@/components/LangProvider";
 import type { FormDictionary } from "@/lib/labels";
 import type { Analytics, Lead } from "@/components/types";
@@ -20,6 +21,7 @@ const TABS = [
   { id: "pipeline", tk: "tabPipeline" },
   { id: "analytics", tk: "tabAnalytics" },
   { id: "team", tk: "tabTeam" },
+  { id: "agents", tk: "tabAgents" },
   { id: "settings", tk: "tabSettings" },
 ] as const;
 type Tab = (typeof TABS)[number]["id"];
@@ -401,6 +403,8 @@ function Dashboard() {
           <TeamView data={team} loading={teamLoading} days={teamDays} onDays={setTeamDays} />
         )}
 
+        {tab === "agents" && <AgentsView pw={pw} />}
+
         {/* Kept mounted, only hidden. Unmounting on every tab switch threw
             away all three components' state, so coming back meant a full
             reload each time - health, accounts, datasets, pages, campaigns,
@@ -421,6 +425,7 @@ function Dashboard() {
             dictionary={dictionary}
             pw={pw}
             onClose={() => setSelected(null)}
+            onChanged={() => load()}
           />
         )}
       </main>

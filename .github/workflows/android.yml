@@ -1,0 +1,79 @@
+name: Agent app (Android)
+
+# Builds the agent app's APK and publishes it as the repository's latest
+# release, so the fixed link
+#   https://github.com/Dlleni-Real-Estate/Conversions-API/releases/latest/download/dlleni-agent.apk
+# always serves the newest build. Runs when anything under android/ changes.
+
+on:
+  push:
+    paths:
+      - "android/**"
+      - ".github/workflows/android.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
+
+      # A stable signing key, if the repository has one (see android/README.md).
+      # Without it the APK is signed with this runner's throwaway debug key.
+      - name: Signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+            echo "Signing with the repository key."
+          else
+            echo "::warning::No ANDROID_KEYSTORE_B64 secret - signed with a throwaway key; the next build will not install over this one."
+          fi
+
+      - name: Build APK
+        working-directory: android
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: gradle assembleRelease --no-daemon --stacktrace
+
+      - name: Collect APK
+        run: |
+          cp android/app/build/outputs/apk/release/app-release.apk dlleni-agent.apk
+          ls -la dlleni-agent.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dlleni-agent-apk
+          path: dlleni-agent.apk
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="agent-v1.0.${{ github.run_number }}"
+          gh release create "$TAG" dlleni-agent.apk \
+            --target "${{ github.sha }}" \
+            --title "Dlleni Agent 1.0.${{ github.run_number }}" \
+            --notes "Agent app build from \`${{ github.ref_name }}\` (${{ github.sha }}). Install on Android: open this page on the phone, download dlleni-agent.apk, allow installing from this source, then sign in with the username and password from the dashboard's Agents & routing tab." \
+            --latest
