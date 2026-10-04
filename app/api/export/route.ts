@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
+import { agentsSchemaReady } from "@/lib/schema";
 import { isAuthed } from "@/lib/auth";
 import { STAGE_BY_STATUS, type Status } from "@/lib/stages";
 import { answerLabel, buildDictionary, questionLabel } from "@/lib/labels";
@@ -89,9 +90,9 @@ export async function GET(req: NextRequest) {
       "lead_id,full_name,phone,email,status,status_at,owner,deal_value,quality_score,submitted_at," +
         "campaign_name,adset_name,ad_name,form_name,platform,raw_fields"
     )
-    .eq("is_test", false)
     .order("submitted_at", { ascending: false })
     .limit(5000);
+  if (await agentsSchemaReady(db)) q = q.eq("is_test", false);
 
   const account = (p.get("account") || "").replace(/^act_/, "");
   if (account && account !== "all") q = q.eq("ad_account_id", account);

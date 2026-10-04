@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
+import { agentsSchemaReady } from "@/lib/schema";
 import { isAuthed } from "@/lib/auth";
 import { FUNNEL, STAGE_BY_STATUS, rankOf, type Status } from "@/lib/stages";
 import { answerLabel, buildDictionary, questionLabel } from "@/lib/labels";
@@ -73,9 +74,11 @@ export async function GET(req: NextRequest) {
     .select(
       "lead_id,status,submitted_at,status_at,deal_value,ad_id,ad_name,campaign_id,campaign_name,platform,raw_fields,quality_score,ad_account_id,adset_id,adset_name"
     )
-    .eq("is_test", false)
     .order("submitted_at", { ascending: false })
     .limit(5000);
+  // Test leads (migration 0015) are pretend; once the column exists they are left out.
+  const agentsReady = await agentsSchemaReady(db);
+  if (agentsReady) leadQuery = leadQuery.eq("is_test", false);
   if (scoped) leadQuery = leadQuery.eq("campaign_id", scoped);
   if (account) leadQuery = leadQuery.eq("ad_account_id", account);
   if (adset) leadQuery = leadQuery.eq("adset_id", adset);
@@ -101,7 +104,8 @@ export async function GET(req: NextRequest) {
   // filtered leads collapsed the list to the one option already chosen, and a
   // picker with one option hides itself - which strands you inside the filter
   // with no way back to "all".
-  let optionsQuery = db.from("leads").select("campaign_id,campaign_name,adset_id,adset_name").eq("is_test", false).limit(5000);
+  let optionsQuery = db.from("leads").select("campaign_id,campaign_name,adset_id,adset_name").limit(5000);
+  if (agentsReady) optionsQuery = optionsQuery.eq("is_test", false);
   if (account) optionsQuery = optionsQuery.eq("ad_account_id", account);
 
   // ad_performance predates ad sets and carries only the NAME. Grouping the

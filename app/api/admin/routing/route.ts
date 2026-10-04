@@ -3,6 +3,7 @@ import { supabaseAdmin } from "@/lib/supabase";
 import { isAdmin, isAuthed } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { backfillCampaign, routePending } from "@/lib/routing";
+import { agentsSchemaReady } from "@/lib/schema";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -71,6 +72,7 @@ async function rulesWithRoutes(db: DB) {
 export async function GET(req: NextRequest) {
   if (!isAuthed(req)) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const db = supabaseAdmin();
+  if (!(await agentsSchemaReady(db))) return NextResponse.json({ ok: false, error: "schema_pending", rules: [], campaigns: [] });
   const [{ rules, error }, campaigns] = await Promise.all([rulesWithRoutes(db), campaignOptions(db)]);
   return NextResponse.json({ ok: !error, error, rules, campaigns });
 }

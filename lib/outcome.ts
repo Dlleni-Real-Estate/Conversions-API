@@ -36,8 +36,9 @@ export type StageResult =
       capi: Record<string, unknown>;
     };
 
-const LEAD_RETURN =
-  "lead_id, phone, email, deal_value, status, ad_account_id, submitted_at, status_at, raw_fields, is_test";
+// Every column, so is_test is read when migration 0015 has run and simply
+// absent (falsy) before - naming it would fail the update on an older schema.
+const LEAD_RETURN = "*";
 
 export async function applyStageChange(db: DB, change: StageChange): Promise<StageResult> {
   const stage = STAGE_BY_STATUS[change.status];

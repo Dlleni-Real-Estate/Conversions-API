@@ -438,6 +438,8 @@ export const DICT = {
       bad_username: "Username: 2–40 letters, digits, dot, dash or underscore. No spaces.",
       short_password: "Password must be at least 6 characters.",
       username_taken: "That username is taken.",
+      schema_pending:
+        "Agents need a one-time database update: run supabase/migrations/0015_agents_routing.sql in Supabase's SQL Editor. Everything here switches on within a minute, no redeploy.",
     } as Record<string, string>,
     rtTitle: "Lead routing",
     rtSub: "Pick a campaign, the agents who get its leads and each one's share. New leads are handed out within a minute of arriving and the agent's phone rings like a call.",
@@ -897,6 +899,8 @@ export const DICT = {
       bad_username: "اسم المستخدم: من ٢ لـ ٤٠ حرف إنجليزي أو أرقام أو . - _ من غير مسافات.",
       short_password: "الباسورد لازم يكون ٦ حروف على الأقل.",
       username_taken: "اسم المستخدم ده موجود قبل كده.",
+      schema_pending:
+        "الإيجنتس محتاجين تحديث لقاعدة البيانات مرة واحدة: شغّل supabase/migrations/0015_agents_routing.sql من SQL Editor في Supabase. كل حاجة هنا هتشتغل خلال دقيقة من غير deploy تاني.",
     } as Record<string, string>,
     rtTitle: "توزيع الليدز",
     rtSub: "اختار الكمبين، والإيجنتس اللي هياخدوا الليدز بتاعتها، ونسبة كل واحد. الليد الجديدة بتتوزع خلال دقيقة من وصولها وتليفون الإيجنت بيرن زي المكالمة.",

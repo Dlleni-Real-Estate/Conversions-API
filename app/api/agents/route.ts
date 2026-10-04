@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
+import { agentsSchemaReady } from "@/lib/schema";
 import { isAuthed } from "@/lib/auth";
 import {
   deriveLead,
@@ -42,9 +43,9 @@ export async function GET(req: NextRequest) {
       "lead_id,full_name,campaign_id,campaign_name,adset_name,status,quality_score,owner,submitted_at,crm_created_at,crm_pushed_at,crm_returning_since"
     )
     .gte("submitted_at", since)
-    .eq("is_test", false)
     .order("submitted_at", { ascending: false })
     .limit(3000);
+  if (await agentsSchemaReady(db)) q = q.eq("is_test", false);
   if (scoped) q = q.eq("campaign_id", scoped);
   if (account) q = q.eq("ad_account_id", account);
   if (adset) q = q.eq("adset_id", adset);

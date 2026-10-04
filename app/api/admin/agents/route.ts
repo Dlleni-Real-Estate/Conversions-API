@@ -13,6 +13,7 @@ import {
   type Agent,
 } from "@/lib/agents";
 import { rankOf, type Status } from "@/lib/stages";
+import { agentsSchemaReady } from "@/lib/schema";
 
 export const dynamic = "force-dynamic";
 
@@ -23,6 +24,8 @@ export const dynamic = "force-dynamic";
 export async function GET(req: NextRequest) {
   if (!isAuthed(req)) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const db = supabaseAdmin();
+  // Deployed before migration 0015 ran: say so plainly, not as a SQL error.
+  if (!(await agentsSchemaReady(db))) return NextResponse.json({ ok: false, error: "schema_pending", agents: [] });
 
   const { data: agents, error } = await db.from("agents").select(AGENT_COLUMNS).order("created_at", { ascending: true });
   if (error) return NextResponse.json({ ok: false, error: error.message, agents: [] }, { status: 200 });

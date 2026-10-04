@@ -13,6 +13,7 @@ import {
 } from "@/lib/meta";
 import { activeAccounts, scopeIndex } from "@/lib/accounts";
 import { leadRow } from "@/lib/ingest";
+import { agentsSchemaReady } from "@/lib/schema";
 import { routePending, routedCampaignIds, CRM_HOLD_MS } from "@/lib/routing";
 import { resolveCampaigns } from "@/lib/tracking";
 import { supabaseAdmin } from "@/lib/supabase";
@@ -571,18 +572,19 @@ async function pushLeadsToCrm(
   if (!optedIn || optedIn.length === 0) return { pushed: 0, failed: 0, left: 0 };
   const ids = optedIn.map((a) => String(a.ad_account_id));
 
-  const { data: due, error } = await db
+  let dueQuery = db
     .from("leads")
     .select("lead_id,full_name,phone,email,form_id,raw_fields,campaign_id,campaign_name,ad_name,submitted_at,crm_push_error")
     .in("ad_account_id", ids)
     .is("crm_pushed_at", null)
-    // A lead handed to an agent in this app is that agent's. Pushing it to 8X
-    // as well puts a second person on the same phone call.
-    .is("agent_id", null)
-    .eq("is_test", false)
     .not("phone", "is", null)
     .order("submitted_at", { ascending: true })
     .limit(limit + 1);
+  // A lead handed to an agent in this app is that agent's. Pushing it to 8X
+  // as well puts a second person on the same phone call; a test lead is
+  // nobody at all. (Only once migration 0015 has run - lib/schema.ts.)
+  if (await agentsSchemaReady(db)) dueQuery = dueQuery.is("agent_id", null).eq("is_test", false);
+  const { data: due, error } = await dueQuery;
 
   if (error) {
     console.error(`[sync] crm push: cannot read the queue - ${error.message}`);
@@ -741,14 +743,15 @@ async function sendMissingStageEvents(
 
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 3600_000).toISOString();
 
-  const { data: recent, error: leadErr } = await db
+  let recentQuery = db
     .from("leads")
     .select("lead_id, phone, email, status, deal_value, ad_account_id, quality_score, submitted_at, status_at, raw_fields")
     .gte("submitted_at", sevenDaysAgo)
-    // Test leads are pretend customers; Meta must never hear of them.
-    .eq("is_test", false)
     .order("submitted_at", { ascending: false })
     .limit(limit);
+  // Test leads are pretend customers; Meta must never hear of them.
+  if (await agentsSchemaReady(db)) recentQuery = recentQuery.eq("is_test", false);
+  const { data: recent, error: leadErr } = await recentQuery;
 
   if (leadErr) console.error("[sync] stage sweep: lead query failed —", leadErr.message);
   if (!recent || recent.length === 0) {
@@ -1024,18 +1027,30 @@ async function syncCrmStatuses(
   const { data: noCrm } = await db.from("ad_accounts").select("ad_account_id").eq("crm_sync", false);
   const crmExcluded = new Set((noCrm ?? []).map((a) => String(a.ad_account_id)));
 
-  const { data: allOurs, error } = await db
+  const agentsReady = await agentsSchemaReady(db);
+  let oursQuery = db
     .from("leads")
-    .select("lead_id,status,owner,phone,crm_created_at,submitted_at,crm_returning_since,crm_lookup_at,crm_pushed_at,ad_account_id,agent_id")
-    .eq("is_test", false);
+    .select(
+      "lead_id,status,owner,phone,crm_created_at,submitted_at,crm_returning_since,crm_lookup_at,crm_pushed_at,ad_account_id" +
+        (agentsReady ? ",agent_id" : "")
+    );
+  if (agentsReady) oursQuery = oursQuery.eq("is_test", false);
+  const { data: allOurs, error } = await oursQuery;
   if (error) return skippedResult(error.message);
   // The same goes for a single lead handed to an agent in the agent app: its
   // stage is what that agent picked after the call, and 8X must not overwrite
   // it. To the mirror, neither kind of lead exists (nor do test leads).
-  const ours = (allOurs ?? []).filter((l) => {
-    const row = l as { ad_account_id?: string | null; agent_id?: string | null };
-    return !crmExcluded.has(String(row.ad_account_id ?? "")) && !row.agent_id;
-  });
+  // The column list is built at runtime (agent_id only once 0015 has run), so
+  // the row type is stated rather than inferred.
+  type MirrorRow = {
+    lead_id: string; status: string; owner: string | null; phone: string | null;
+    crm_created_at: string | null; submitted_at: string; crm_returning_since: string | null;
+    crm_lookup_at: string | null; crm_pushed_at: string | null; ad_account_id: string | null;
+    agent_id?: string | null;
+  };
+  const ours = ((allOurs ?? []) as unknown as MirrorRow[]).filter(
+    (row) => !crmExcluded.has(String(row.ad_account_id ?? "")) && !row.agent_id
+  );
   type Ours = {
     lead_id: string; phone: string | null; owner: string | null; submitted_at: string;
     crm_created_at: string | null; crm_returning_since: string | null; crm_lookup_at: string | null;
