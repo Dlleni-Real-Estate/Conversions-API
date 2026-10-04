@@ -290,7 +290,7 @@ lib/
   routing.ts                hand out waiting leads, speed rule, backfill
   outcome.ts                one stage move: store, timeline, quality, CAPI
   ingest.ts                 one Meta lead -> one row, for sync and tick alike
-supabase/migrations/        schema (0014: agents and routing; route_lead() does the hand-out)
+supabase/migrations/        schema (0015: agents and routing; route_lead() does the hand-out)
 android/                    the agent app's native shell, see android/README.md
 ```
 

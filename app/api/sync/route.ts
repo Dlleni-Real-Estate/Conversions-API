@@ -1014,14 +1014,24 @@ async function syncCrmStatuses(
   }
   const CRM_BUDGET_MS = opts.budgetMs;
 
+  // Accounts kept out of 8X entirely (ad_accounts.crm_sync = false). Their
+  // leads are worked in this app only, so the mirror must never touch them:
+  // a phone match against an unrelated 8X record would otherwise overwrite
+  // the stage the team set here and stamp an 8X agent as the owner.
+  const { data: noCrm } = await db.from("ad_accounts").select("ad_account_id").eq("crm_sync", false);
+  const crmExcluded = new Set((noCrm ?? []).map((a) => String(a.ad_account_id)));
+
   const { data: allOurs, error } = await db
     .from("leads")
-    .select("lead_id,status,owner,phone,crm_created_at,submitted_at,crm_returning_since,crm_lookup_at,crm_pushed_at,agent_id");
+    .select("lead_id,status,owner,phone,crm_created_at,submitted_at,crm_returning_since,crm_lookup_at,crm_pushed_at,ad_account_id,agent_id");
   if (error) return skippedResult(error.message);
-  // A lead handed to an agent in this app is worked HERE: its stage is what
-  // that agent picked after the call. Mirroring 8X onto it would let a second
-  // system overwrite the first, so to the mirror such a lead does not exist.
-  const ours = (allOurs ?? []).filter((l) => !(l as { agent_id?: string | null }).agent_id);
+  // The same goes for a single lead handed to an agent in the agent app: its
+  // stage is what that agent picked after the call, and 8X must not overwrite
+  // it. To the mirror, neither kind of lead exists.
+  const ours = (allOurs ?? []).filter((l) => {
+    const row = l as { ad_account_id?: string | null; agent_id?: string | null };
+    return !crmExcluded.has(String(row.ad_account_id ?? "")) && !row.agent_id;
+  });
   type Ours = {
     lead_id: string; phone: string | null; owner: string | null; submitted_at: string;
     crm_created_at: string | null; crm_returning_since: string | null; crm_lookup_at: string | null;
