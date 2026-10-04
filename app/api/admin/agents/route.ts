@@ -17,6 +17,36 @@ import { agentsSchemaReady } from "@/lib/schema";
 
 export const dynamic = "force-dynamic";
 
+/** The setting on an agent's phone that would keep it from ringing. */
+type PhoneIssue = "notifications" | "full_screen" | "battery" | "background" | "alarms" | "autostart" | "popup";
+type AgentPhone = { maker: string; model: string; android: number | null; app: string | null; seen: string; issues: PhoneIssue[] };
+
+/** The Android app's x-device report (see android/.../Diag.java), if this session has one. */
+function phoneFrom(device: string | null, seen: string): AgentPhone | null {
+  if (!device || !device.startsWith("{")) return null;
+  try {
+    const d = JSON.parse(device) as Record<string, unknown>;
+    const issues: PhoneIssue[] = [];
+    if (d.n === false) issues.push("notifications");
+    if (d.fs === false) issues.push("full_screen");
+    if (d.bat === false) issues.push("battery");
+    if (d.bg === false) issues.push("background");
+    if (d.ex === false) issues.push("alarms");
+    if (d.as === "todo") issues.push("autostart");
+    if (d.pu === "todo") issues.push("popup");
+    return {
+      maker: String(d.mk ?? ""),
+      model: String(d.md ?? ""),
+      android: typeof d.sdk === "number" ? d.sdk : null,
+      app: d.v ? String(d.v) : null,
+      seen,
+      issues,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * GET -> every agent, with the numbers a manager looks at first: how many
  * leads they hold, how many are still untouched, and how fast they call.
@@ -31,13 +61,24 @@ export async function GET(req: NextRequest) {
   if (error) return NextResponse.json({ ok: false, error: error.message, agents: [] }, { status: 200 });
 
   const since = new Date(Date.now() - 30 * 24 * 3600_000).toISOString();
-  const { data: leads } = await db
-    .from("leads")
-    .select("agent_id,status,assigned_at,first_call_at")
-    .not("agent_id", "is", null)
-    .eq("is_test", false)
-    .gte("assigned_at", since)
-    .limit(10000);
+  const [{ data: leads }, { data: sessions }] = await Promise.all([
+    db
+      .from("leads")
+      .select("agent_id,status,assigned_at,first_call_at")
+      .not("agent_id", "is", null)
+      .eq("is_test", false)
+      .gte("assigned_at", since)
+      .limit(10000),
+    db.from("agent_sessions").select("agent_id,device,last_used_at").order("last_used_at", { ascending: false }).limit(500),
+  ]);
+
+  // Each agent's most recently active phone, and what on it would stop a ring.
+  const phones = new Map<string, AgentPhone>();
+  for (const s of (sessions ?? []) as { agent_id: string; device: string | null; last_used_at: string }[]) {
+    if (phones.has(s.agent_id)) continue;
+    const p = phoneFrom(s.device, s.last_used_at);
+    if (p) phones.set(s.agent_id, p);
+  }
 
   const today = cairoMidnight();
   type L = { agent_id: string; status: Status; assigned_at: string | null; first_call_at: string | null };
@@ -54,6 +95,7 @@ export async function GET(req: NextRequest) {
       return {
         ...a,
         online: isOnline(a.last_seen_at),
+        phone_setup: phones.get(a.id) ?? null,
         stats: {
           leads_30d: mine.length,
           today: mine.filter((l) => l.assigned_at && Date.parse(l.assigned_at) >= today).length,

@@ -2,7 +2,6 @@ package com.dlleni.agent;
 
 import android.Manifest;
 import android.app.Activity;
-import android.app.NotificationManager;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.content.pm.PackageManager;
@@ -14,7 +13,6 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
-import android.os.PowerManager;
 import android.provider.Settings;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -162,6 +160,8 @@ public class MainActivity extends Activity {
             js("window.dlleniResume && window.dlleniResume()");
         }
         if (Prefs.shouldWatch(this)) WatchService.start(this);
+        // Off shift nothing polls, but the agent's callbacks still need their alarm.
+        else if (Prefs.signedIn(this)) Reminders.refreshAsync(this, null);
     }
 
     @Override
@@ -272,35 +272,13 @@ public class MainActivity extends Activity {
 
     // ── Permissions ──────────────────────────────────────────────────────────
 
-    private boolean notificationsOk() {
-        NotificationManager nm = getSystemService(NotificationManager.class);
-        boolean granted = Build.VERSION.SDK_INT < 33
-                || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED;
-        return granted && nm != null && nm.areNotificationsEnabled();
-    }
-
-    private boolean fullScreenOk() {
-        if (Build.VERSION.SDK_INT < 34) return true;
-        NotificationManager nm = getSystemService(NotificationManager.class);
-        return nm != null && nm.canUseFullScreenIntent();
-    }
-
-    private boolean batteryOk() {
-        PowerManager pm = getSystemService(PowerManager.class);
-        return pm != null && pm.isIgnoringBatteryOptimizations(getPackageName());
-    }
-
-    private boolean callOk() {
-        return checkSelfPermission(Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED;
-    }
-
     /** First sign-in: ask for the two runtime permissions in one go. */
     private void askEssentials() {
         java.util.List<String> want = new java.util.ArrayList<>();
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             want.add(Manifest.permission.POST_NOTIFICATIONS);
         }
-        if (!callOk()) want.add(Manifest.permission.CALL_PHONE);
+        if (!Diag.callOk(this)) want.add(Manifest.permission.CALL_PHONE);
         if (!want.isEmpty()) requestPermissions(want.toArray(new String[0]), REQ_PERMS);
     }
 
@@ -338,6 +316,21 @@ public class MainActivity extends Activity {
                 break;
             case "battery":
                 openSettings(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, true);
+                break;
+            case "background":
+                // "Restricted" is undone on the app's own page: Battery > Unrestricted.
+                openSettings(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, true);
+                break;
+            case "exact":
+                if (Build.VERSION.SDK_INT >= 31) openSettings(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, true);
+                break;
+            case "autostart":
+                Prefs.setOpened(this, "autostart");
+                if (!Oem.open(this, Oem.autostart(this))) openSettings(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, true);
+                break;
+            case "popup":
+                Prefs.setOpened(this, "popup");
+                if (!Oem.open(this, Oem.popup(this))) openSettings(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, true);
                 break;
             case "call":
                 if (shouldShowRequestPermissionRationale(Manifest.permission.CALL_PHONE)
@@ -398,6 +391,7 @@ public class MainActivity extends Activity {
             Prefs.clearSession(MainActivity.this);
             main.post(() -> {
                 Alerts.stopRing(MainActivity.this);
+                Reminders.cancelAll(MainActivity.this);
                 WatchService.stop(MainActivity.this);
             });
         }
@@ -439,7 +433,9 @@ public class MainActivity extends Activity {
         public void ack(String leadId) {
             if (leadId == null) return;
             main.post(() -> {
-                if (leadId != null && leadId.equals(Alerts.ringingLead)) Alerts.stopRing(MainActivity.this);
+                // Opened in the app: whatever is ringing for it (lead or callback) stops.
+                Alerts.Lead shown = Alerts.current;
+                if (shown != null && leadId.equals(shown.id)) Alerts.stopRing(MainActivity.this);
                 Alerts.lastRing.put(leadId, System.currentTimeMillis());
             });
         }
@@ -447,14 +443,7 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public String status() {
             try {
-                return new JSONObject()
-                        .put("version", Prefs.version(MainActivity.this))
-                        .put("notifications", notificationsOk())
-                        .put("fullScreen", fullScreenOk())
-                        .put("battery", batteryOk())
-                        .put("callPhone", callOk())
-                        .put("watching", WatchService.running)
-                        .toString();
+                return Diag.status(MainActivity.this).toString();
             } catch (Exception e) {
                 return "{}";
             }
@@ -474,14 +463,23 @@ public class MainActivity extends Activity {
             main.post(() -> Alerts.ensureChannels(MainActivity.this));
         }
 
-        /** Five seconds to lock the phone, then a pretend lead rings. */
+        /**
+         * The real path, end to end: an alarm in 15 seconds wakes the app -
+         * even if the agent has swiped it away and locked the phone - and the
+         * service rings a pretend lead.
+         */
         @JavascriptInterface
         public void testRing() {
-            boolean ar = Alerts.arabic(MainActivity.this);
-            main.postDelayed(() -> Alerts.ring(MainActivity.this, new Alerts.Lead("test",
-                    ar ? "عميل تجريبي" : "Test customer", "201000000000",
-                    ar ? "اختبار الرنة" : "Ring test",
-                    ar ? "الميزانية: ٥٠٠ ألف\nنوع الوحدة: شقة" : "Budget: 500k\nUnit: apartment"), 0), 5000);
+            Reminders.scheduleTest(MainActivity.this, 15_000);
+        }
+
+        /** A follow-up time was set or changed: re-read them and set the alarm. */
+        @JavascriptInterface
+        public void refreshReminders() {
+            main.post(() -> {
+                if (WatchService.running) WatchService.pollNow(MainActivity.this);
+                else if (Prefs.signedIn(MainActivity.this)) Reminders.refreshAsync(MainActivity.this, null);
+            });
         }
     }
 }

@@ -56,7 +56,21 @@ export type AgentRow = {
   last_seen_at: string | null;
   app_version: string | null;
   online: boolean;
+  /** The agent's phone, as the Android app last reported it; null before app 1.0.4. */
+  phone_setup: AgentPhone | null;
   stats: AgentStats;
+};
+
+/** A setting on the agent's phone that would keep it from ringing. */
+export type PhoneIssue = "notifications" | "full_screen" | "battery" | "background" | "alarms" | "autostart" | "popup";
+
+export type AgentPhone = {
+  maker: string;
+  model: string;
+  android: number | null;
+  app: string | null;
+  seen: string;
+  issues: PhoneIssue[];
 };
 
 export type RouteRow = { campaign_id: string; agent_id: string; weight: number; assigned: number };

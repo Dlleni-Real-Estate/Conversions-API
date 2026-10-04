@@ -15,8 +15,29 @@
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <!-- One tap from the alert to the customer's phone ringing. -->
     <uses-permission android:name="android.permission.CALL_PHONE" />
+    <!-- Alarms that fire with the app closed: callbacks at the minute the agent
+         picked, and the watchdog that restarts the service if a phone kills it. -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <!-- The ring lifts a low alarm volume for its minute, then puts it back. -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
 
     <uses-feature android:name="android.hardware.telephony" android:required="false" />
+
+    <!-- Phone makers' autostart screens (see Oem.java): Android 11+ hides
+         other apps' screens unless they are named here. -->
+    <queries>
+        <package android:name="com.miui.securitycenter" />
+        <package android:name="com.coloros.safecenter" />
+        <package android:name="com.oppo.safe" />
+        <package android:name="com.vivo.permissionmanager" />
+        <package android:name="com.iqoo.secure" />
+        <package android:name="com.huawei.systemmanager" />
+        <package android:name="com.hihonor.systemmanager" />
+        <package android:name="com.transsion.phonemaster" />
+        <package android:name="com.oneplus.security" />
+        <package android:name="com.asus.mobilemanager" />
+    </queries>
 
     <application
         android:name=".App"
@@ -69,6 +90,10 @@
 
         <receiver
             android:name=".ActionReceiver"
+            android:exported="false" />
+
+        <receiver
+            android:name=".AlarmReceiver"
             android:exported="false" />
     </application>
 </manifest>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { STAGE_BY_STATUS, type Status } from "@/lib/stages";
 import { answerLabel, questionLabel, type FormDictionary } from "@/lib/labels";
 import { AGENT_TEXT, type AgentLang, type AgentText } from "@/lib/agentText";
@@ -67,6 +67,8 @@ type NativeBridge = {
   testRing(): void;
   /** Since app 1.0.2: the ring and notifications follow the app's language. */
   setLang?(lang: string): void;
+  /** Since app 1.0.4: a follow-up changed; the phone re-reads them and sets its alarm. */
+  refreshReminders?(): void;
 };
 
 type NativeStatus = {
@@ -75,6 +77,17 @@ type NativeStatus = {
   fullScreen?: boolean;
   battery?: boolean;
   callPhone?: boolean;
+  // Since app 1.0.4
+  background?: boolean;
+  exactAlarms?: boolean;
+  /** The phone maker's own autostart / pop-up screens: none on this phone, opened, or still to do. */
+  autostart?: "na" | "opened" | "todo";
+  popup?: "na" | "opened" | "todo";
+  watching?: boolean;
+  lastCheck?: number;
+  lastError?: string;
+  maker?: string;
+  model?: string;
 };
 
 declare global {
@@ -295,7 +308,7 @@ export default function AgentApp() {
   const [token, setToken] = useState<string>("");
   const [agent, setAgent] = useState<Agent | null>(null);
 
-  const [screen, setScreen] = useState<"list" | "lead" | "settings">("list");
+  const [screen, setScreen] = useState<"list" | "lead" | "settings" | "setup">("list");
   const [view, setView] = useState<View>("new");
   const [search, setSearch] = useState("");
   const [leads, setLeads] = useState<Lead[]>([]);
@@ -312,7 +325,10 @@ export default function AgentApp() {
 
   const [toast, setToast] = useState<string | null>(null);
   const [native, setNative] = useState<NativeStatus | null>(null);
+  const [testNote, setTestNote] = useState<string | null>(null);
   const pendingCall = useRef<string | null>(null);
+  const deepLinked = useRef(false);
+  const autoSetup = useRef(false);
 
   // Language: English unless the agent chose Arabic. The whole document
   // flips, so native widgets sit on the right side too, and the native shell
@@ -487,11 +503,20 @@ export default function AgentApp() {
     const p = new URLSearchParams(window.location.search);
     const id = p.get("lead");
     if (id) {
+      deepLinked.current = true;
       openLead(id, p.get("after_call") === "1");
       window.history.replaceState(null, "", "/agent");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
+
+  // A phone that is not set up to ring opens on the setup steps, once per
+  // launch - unless the app was opened from a ring, which wins.
+  useEffect(() => {
+    if (!agent || !native || autoSetup.current) return;
+    autoSetup.current = true;
+    if (!deepLinked.current && setupMissing(native) > 0) setScreen("setup");
+  }, [agent, native]);
 
   // Native callbacks, and the browser's way of noticing a call ended.
   useEffect(() => {
@@ -510,7 +535,7 @@ export default function AgentApp() {
         return true;
       }
       if (screen !== "list") {
-        setScreen("list");
+        setScreen(screen === "setup" ? "settings" : "list");
         loadList();
         return true;
       }
@@ -567,6 +592,16 @@ export default function AgentApp() {
     }
   };
 
+  // The real path: the app is closed and the phone locked, an alarm wakes it
+  // and it rings. The note stays up long enough to read while closing the app.
+  const testRing = () => {
+    const b = bridge();
+    if (!b) return;
+    b.testRing();
+    setTestNote(tx.testScheduled);
+    setTimeout(() => setTestNote(null), 20_000);
+  };
+
   if (!booted) return <Splash />;
   if (!token || !agent) {
     return (
@@ -589,7 +624,7 @@ export default function AgentApp() {
     );
   }
 
-  const setupIncomplete = !!native && (!native.notifications || native.fullScreen === false || !native.battery);
+  const setupIncomplete = !!native && setupMissing(native) > 0;
 
   return (
     <div className="agent-app min-h-screen">
@@ -610,7 +645,7 @@ export default function AgentApp() {
           onCall={(l) => startCall(l, "phone")}
           onAvailable={setAvailable}
           onLang={setLang}
-          onSetup={() => setScreen("settings")}
+          onSetup={() => setScreen("setup")}
           onRefresh={loadList}
           setupIncomplete={setupIncomplete}
         />
@@ -649,6 +684,9 @@ export default function AgentApp() {
           onAvailable={setAvailable}
           onRefreshNative={() => setNative(nativeStatus())}
           onTestLead={sendTestLead}
+          onSetup={() => setScreen("setup")}
+          onTestRing={testRing}
+          testNote={testNote}
           onLogout={async () => {
             await api("/api/agent/logout", {}).catch(() => {});
             signOutLocal();
@@ -656,7 +694,18 @@ export default function AgentApp() {
         />
       )}
 
-      {screen !== "lead" && (
+      {screen === "setup" && (
+        <SetupScreen
+          tx={tx}
+          native={native}
+          onBack={() => setScreen("settings")}
+          onRefreshNative={() => setNative(nativeStatus())}
+          onTestRing={testRing}
+          testNote={testNote}
+        />
+      )}
+
+      {screen !== "lead" && screen !== "setup" && (
         <TabBar
           tx={tx}
           active={screen === "settings" ? "settings" : view}
@@ -679,6 +728,8 @@ export default function AgentApp() {
           onClose={() => setSheetFor(null)}
           onSave={async (payload) => {
             await api(`/api/agent/leads/${encodeURIComponent(sheetFor.lead_id)}`, { action: "outcome", ...payload });
+            // A new callback time: the phone sets its alarm for it now.
+            bridge()?.refreshReminders?.();
           }}
           onDone={() => {
             setSheetFor(null);
@@ -1416,12 +1467,14 @@ function LeadScreen({
 // ── After the call ──────────────────────────────────────────────────────────
 
 type CallResult = "answered" | "no_answer" | "unreachable";
-type FollowPick = "none" | "1h" | "3h" | "tonight" | "tomorrow" | "custom";
+type FollowPick = "none" | "15m" | "30m" | "1h" | "2h" | "tonight" | "tomorrow" | "custom";
+
+const FOLLOW_MINUTES: Partial<Record<FollowPick, number>> = { "15m": 15, "30m": 30, "1h": 60, "2h": 120 };
 
 function followTime(pick: FollowPick, custom: string): string | null {
   const d = new Date();
-  if (pick === "1h") return new Date(Date.now() + 3600_000).toISOString();
-  if (pick === "3h") return new Date(Date.now() + 3 * 3600_000).toISOString();
+  const mins = FOLLOW_MINUTES[pick];
+  if (mins) return new Date(Date.now() + mins * 60_000).toISOString();
   if (pick === "tonight") {
     d.setHours(20, 0, 0, 0);
     if (d.getTime() < Date.now() + 15 * 60_000) d.setDate(d.getDate() + 1);
@@ -1521,12 +1574,12 @@ function OutcomeSheet({
   const [err, setErr] = useState<string | null>(null);
 
   // Sensible reminders, so the common case is one tap: an unanswered call is
-  // tried again in an hour, a switched-off phone in three, an interested lead
-  // that needs time tomorrow.
+  // tried again in half an hour, a switched-off phone in two, an interested
+  // lead that needs time tomorrow. At that time the phone rings like a call.
   const pickCall = (c: CallResult) => {
     setCall(c);
     setResult(null);
-    setFollow(c === "no_answer" ? "1h" : c === "unreachable" ? "3h" : "none");
+    setFollow(c === "no_answer" ? "30m" : c === "unreachable" ? "2h" : "none");
   };
   const pickResult = (s: Status) => {
     setResult(s);
@@ -1560,8 +1613,10 @@ function OutcomeSheet({
   };
 
   const follows: { id: FollowPick; label: string }[] = [
+    { id: "15m", label: tx.in15 },
+    { id: "30m", label: tx.in30 },
     { id: "1h", label: tx.inHour },
-    { id: "3h", label: tx.in3Hours },
+    { id: "2h", label: tx.in2Hours },
     { id: "tonight", label: tx.tonight },
     { id: "tomorrow", label: tx.tomorrow },
     { id: "custom", label: tx.custom },
@@ -1676,6 +1731,12 @@ function OutcomeSheet({
                           className="mt-2 w-full rounded-[14px] bg-[var(--fill-3)] px-4 py-3 text-[16px]"
                         />
                       )}
+                      {follow !== "none" && (
+                        <p className="agent-rise mt-2 flex items-start gap-1.5 text-[13px] leading-snug text-[var(--label-2)]">
+                          <IconBell className="mt-px h-3.5 w-3.5 shrink-0 text-[#D97706]" />
+                          {tx.callbackHint}
+                        </p>
+                      )}
                     </>
                   )}
                   <textarea
@@ -1753,6 +1814,9 @@ function SettingsScreen({
   onAvailable,
   onRefreshNative,
   onTestLead,
+  onSetup,
+  onTestRing,
+  testNote,
   onLogout,
 }: {
   tx: AgentText;
@@ -1763,6 +1827,9 @@ function SettingsScreen({
   onAvailable: (v: boolean) => void;
   onRefreshNative: () => void;
   onTestLead: () => void;
+  onSetup: () => void;
+  onTestRing: () => void;
+  testNote: string | null;
   onLogout: () => void;
 }) {
   // The permission screens are the system's; coming back from one is the
@@ -1772,18 +1839,8 @@ function SettingsScreen({
     return () => clearInterval(id);
   }, [onRefreshNative]);
 
-  const checks = useMemo(
-    () =>
-      native
-        ? ([
-            ["notifications", tx.permNotifications, native.notifications, <IconBell key="b" className="h-[18px] w-[18px]" />, "#FF3B30"],
-            ["fullscreen", tx.permFullScreen, native.fullScreen, <IconMaximize key="m" className="h-[18px] w-[18px]" />, "#5856D6"],
-            ["battery", tx.permBattery, native.battery, <IconBattery key="t" className="h-[18px] w-[18px]" />, "#34C759"],
-            ["call", tx.permCall, native.callPhone, <IconPhone key="p" className="h-[18px] w-[18px]" />, "#007AFF"],
-          ] as const).filter(([, , ok]) => ok !== undefined)
-        : [],
-    [native, tx]
-  );
+  const steps = setupSteps(native, tx).filter((st) => !st.optional);
+  const stepsDone = steps.filter((st) => st.done).length;
 
   return (
     <main className="mx-auto max-w-md px-4 pb-32 pt-6">
@@ -1815,30 +1872,20 @@ function SettingsScreen({
 
       {native ? (
         <Group title={tx.ringSettings}>
-          {checks.map(([key, label, ok, icon, color]) => (
-            <Row
-              key={key}
-              icon={icon}
-              color={color}
-              label={label}
-              onClick={ok ? undefined : () => bridge()?.fix(key)}
-              end={
-                ok ? (
-                  <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[#34C759] text-white">
-                    <IconCheck className="h-3.5 w-3.5" strokeWidth={3.5} />
-                  </span>
-                ) : (
-                  <span className="rounded-full bg-[var(--tint)] px-3 py-1.5 text-[13px] font-semibold text-white">{tx.fix}</span>
-                )
-              }
-            />
-          ))}
           <Row
             icon={<IconBell className="h-[18px] w-[18px]" />}
+            color={stepsDone === steps.length ? "#34C759" : "#FF3B30"}
+            label={tx.phoneSetup}
+            sub={stepsDone === steps.length ? tx.setupReady : tx.setupProgress(stepsDone, steps.length)}
+            onClick={onSetup}
+            end={<IconChevronEnd className="h-5 w-5 text-[var(--label-3)] rtl:rotate-180" />}
+          />
+          <Row
+            icon={<IconPhoneFilled className="h-[18px] w-[18px]" />}
             color="#FF9500"
             label={tx.testRing}
-            sub={tx.testRingSub}
-            onClick={() => bridge()?.testRing()}
+            sub={testNote || tx.testRingSub}
+            onClick={onTestRing}
             end={<IconChevronEnd className="h-5 w-5 text-[var(--label-3)] rtl:rotate-180" />}
             last
           />
@@ -1869,8 +1916,6 @@ function SettingsScreen({
         />
       </Group>
 
-      {native && <p className="mt-3 px-4 text-[13px] leading-snug text-[var(--label-2)]">{tx.oemTip}</p>}
-
       <div className="agent-card mt-6 overflow-hidden rounded-[20px]">
         <Row icon={<IconLogOut className="h-[18px] w-[18px]" />} color="#FF3B30" label={tx.logout} onClick={onLogout} last />
       </div>
@@ -1878,6 +1923,174 @@ function SettingsScreen({
       {native?.version && (
         <p className="mt-4 text-center text-[13px] text-[var(--label-3)]">
           {tx.version} {native.version}
+        </p>
+      )}
+    </main>
+  );
+}
+
+// ── Phone setup ─────────────────────────────────────────────────────────────
+
+type SetupStep = {
+  key: string;
+  title: string;
+  sub: string;
+  done: boolean;
+  /** A phone maker's screen we cannot read back: done means "opened once". */
+  opened?: boolean;
+  optional?: boolean;
+  color: string;
+  icon: React.ReactNode;
+};
+
+const titleCase = (v?: string) => (v ? v.charAt(0).toUpperCase() + v.slice(1) : "");
+
+/**
+ * What stands between this phone and a ring, in the order to fix it. Only the
+ * steps this phone has: no autostart row on a Pixel or a Samsung, no pop-up
+ * row anywhere but Xiaomi, and nothing an older app build cannot report.
+ */
+function setupSteps(native: NativeStatus | null, tx: AgentText): SetupStep[] {
+  if (!native) return [];
+  const icon = "h-[18px] w-[18px]";
+  const steps: SetupStep[] = [
+    { key: "notifications", title: tx.stepNotifications, sub: tx.stepNotificationsSub, done: !!native.notifications, color: "#FF3B30", icon: <IconBell className={icon} /> },
+  ];
+  if (native.fullScreen !== undefined) {
+    steps.push({ key: "fullscreen", title: tx.stepFullScreen, sub: tx.stepFullScreenSub, done: native.fullScreen !== false, color: "#5856D6", icon: <IconMaximize className={icon} /> });
+  }
+  steps.push({ key: "battery", title: tx.stepBattery, sub: tx.stepBatterySub, done: !!native.battery, color: "#34C759", icon: <IconBattery className={icon} /> });
+  if (native.background === false) {
+    steps.push({ key: "background", title: tx.stepBackground, sub: tx.stepBackgroundSub, done: false, color: "#FF9500", icon: <IconBattery className={icon} /> });
+  }
+  if (native.autostart && native.autostart !== "na") {
+    const opened = native.autostart === "opened";
+    steps.push({ key: "autostart", title: tx.stepAutostart, sub: tx.stepAutostartSub(titleCase(native.maker)), done: opened, opened, color: "#007AFF", icon: <IconZap className={icon} /> });
+  }
+  if (native.popup && native.popup !== "na") {
+    const opened = native.popup === "opened";
+    steps.push({ key: "popup", title: tx.stepPopup, sub: tx.stepPopupSub, done: opened, opened, color: "#AF52DE", icon: <IconMaximize className={icon} /> });
+  }
+  if (native.exactAlarms !== undefined) {
+    steps.push({ key: "exact", title: tx.stepExact, sub: tx.stepExactSub, done: !!native.exactAlarms, color: "#FF9500", icon: <IconClock className={icon} /> });
+  }
+  if (native.callPhone !== undefined) {
+    steps.push({ key: "call", title: tx.stepCall, sub: tx.stepCallSub, done: !!native.callPhone, optional: true, color: "#007AFF", icon: <IconPhone className={icon} /> });
+  }
+  return steps;
+}
+
+/** How many required steps are still open (labels do not matter for counting). */
+function setupMissing(native: NativeStatus | null): number {
+  return setupSteps(native, AGENT_TEXT.en).filter((st) => !st.optional && !st.done).length;
+}
+
+function SetupScreen({
+  tx,
+  native,
+  onBack,
+  onRefreshNative,
+  onTestRing,
+  testNote,
+}: {
+  tx: AgentText;
+  native: NativeStatus | null;
+  onBack: () => void;
+  onRefreshNative: () => void;
+  onTestRing: () => void;
+  testNote: string | null;
+}) {
+  // Each step opens one of the phone's own settings screens; coming back from
+  // it is the moment to look again.
+  useEffect(() => {
+    const id = setInterval(onRefreshNative, 1500);
+    return () => clearInterval(id);
+  }, [onRefreshNative]);
+
+  const steps = setupSteps(native, tx);
+  const required = steps.filter((st) => !st.optional);
+  const done = required.filter((st) => st.done).length;
+  const ready = required.length > 0 && done === required.length;
+  const oem = !!native?.autostart && native.autostart !== "na";
+
+  const last = native?.lastCheck ? Math.round((Date.now() - native.lastCheck) / 1000) : null;
+  const trouble = !!native?.watching && !!native.lastError && (last === null || last > 120);
+
+  return (
+    <main className="mx-auto max-w-md px-4 pb-16 pt-4">
+      <button onClick={onBack} aria-label={tx.back} className="agent-press -ms-1 flex h-10 w-10 items-center justify-center rounded-full text-[var(--tint)]">
+        <IconChevron className="h-6 w-6 rtl:rotate-180" strokeWidth={2.4} />
+      </button>
+      <h1 className="mt-1 px-1 text-[34px] font-bold leading-[1.1] tracking-[-0.025em]">{tx.phoneSetup}</h1>
+      <p className="mt-1.5 px-1 text-[15px] leading-snug text-[var(--label-2)]">{tx.phoneSetupSub}</p>
+
+      <div className="mt-4 px-1">
+        <div className="h-2 overflow-hidden rounded-full bg-[var(--fill-3)]">
+          <div
+            className="h-full rounded-full transition-[width] duration-500"
+            style={{ width: `${required.length ? (100 * done) / required.length : 0}%`, background: ready ? "var(--call)" : "var(--tint)", transitionTimingFunction: "var(--ease)" }}
+          />
+        </div>
+        <p className="mt-1.5 text-[13px] font-semibold text-[var(--label-2)]">{tx.setupProgress(done, required.length)}</p>
+      </div>
+
+      <div className="agent-card mt-4 overflow-hidden rounded-[20px]">
+        {steps.map((st, i) => (
+          <Row
+            key={st.key}
+            icon={st.icon}
+            color={st.color}
+            label={st.title}
+            sub={st.sub}
+            onClick={st.done && !st.opened ? undefined : () => bridge()?.fix(st.key)}
+            last={i === steps.length - 1}
+            end={
+              st.done && !st.opened ? (
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#34C759] text-white">
+                  <IconCheck className="h-3.5 w-3.5" strokeWidth={3.5} />
+                </span>
+              ) : st.opened ? (
+                <span className="shrink-0 rounded-full bg-[var(--fill-3)] px-3 py-1.5 text-[13px] font-semibold text-[var(--label-2)]">{tx.opened}</span>
+              ) : (
+                <span className={`shrink-0 rounded-full px-3 py-1.5 text-[13px] font-semibold ${st.optional ? "bg-[var(--fill-3)] text-[var(--tint)]" : "bg-[var(--tint)] text-white"}`}>
+                  {st.key === "autostart" || st.key === "popup" ? tx.open : tx.fix}
+                </span>
+              )
+            }
+          />
+        ))}
+      </div>
+      {oem && <p className="mt-3 px-4 text-[13px] leading-snug text-[var(--label-2)]">{tx.lockRecents}</p>}
+
+      <section className={`agent-card mt-6 rounded-[24px] p-5 ${ready ? "agent-rise" : ""}`}>
+        {ready && (
+          <div className="mb-4 flex items-center gap-3">
+            <span className="agent-pop flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[var(--call)] text-white">
+              <IconCheck className="h-5 w-5" strokeWidth={3} />
+            </span>
+            <div>
+              <p className="text-[17px] font-semibold">{tx.setupReady}</p>
+              <p className="text-[13px] text-[var(--label-2)]">{tx.setupReadySub}</p>
+            </div>
+          </div>
+        )}
+        <button
+          onClick={onTestRing}
+          className="agent-press flex w-full items-center justify-center gap-2 rounded-full bg-[var(--call)] py-3.5 text-[17px] font-semibold text-white shadow-[0_8px_20px_rgba(52,199,89,0.3)]"
+        >
+          <IconPhoneFilled className="h-5 w-5" />
+          {tx.testRing}
+        </button>
+        <p className={`mt-3 text-center text-[13px] leading-snug ${testNote ? "font-semibold text-[var(--label)]" : "text-[var(--label-2)]"}`}>
+          {testNote || tx.testRingSub}
+        </p>
+      </section>
+
+      {native?.lastCheck !== undefined && (
+        <p className={`mt-4 px-4 text-[13px] leading-snug ${trouble ? "font-medium text-[#FF3B30]" : "text-[var(--label-3)]"}`}>
+          {tx.lastCheck}: {last === null ? tx.notYet : last < 60 ? tx.secondsAgo(last) : tx.minAgo(Math.round(last / 60))}
+          {trouble && <span className="mt-1 block">{tx.checkTrouble}</span>}
+          {native.maker && <span className="mt-1 block" dir="ltr">{titleCase(native.maker)} {native.model} · {native.version}</span>}
         </p>
       )}
     </main>

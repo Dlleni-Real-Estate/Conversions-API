@@ -40,6 +40,8 @@ final class Api {
             conn.setUseCaches(false);
             conn.setRequestProperty("x-agent-token", Prefs.token(c));
             conn.setRequestProperty("x-app-version", Prefs.version(c));
+            // Is this phone set up to ring? Shown to the admin next to the agent.
+            conn.setRequestProperty("x-device", Diag.header(c).replaceAll("[^\\x20-\\x7E]", "?"));
             conn.setRequestProperty("accept", "application/json");
             if (body != null) {
                 byte[] bytes = body.toString().getBytes(StandardCharsets.UTF_8);
