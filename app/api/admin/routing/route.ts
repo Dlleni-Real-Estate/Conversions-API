@@ -4,6 +4,8 @@ import { isAdmin, isAuthed } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { backfillCampaign, routePending } from "@/lib/routing";
 import { agentsSchemaReady } from "@/lib/schema";
+import { activeAccounts } from "@/lib/accounts";
+import { listCampaigns, type Campaign } from "@/lib/meta";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -27,7 +29,11 @@ async function campaignOptions(db: DB) {
       .limit(5000),
   ]);
 
-  type C = { id: string; name: string; ad_account_id: string | null; last: string; leads_7d: number; unworked_72h: number };
+  type C = {
+    id: string; name: string; ad_account_id: string | null; last: string; leads_7d: number; unworked_72h: number;
+    /** Delivering in the latest insights pull: what the admin most likely wants to route. */
+    active: boolean;
+  };
   const out = new Map<string, C>();
   const weekAgo = Date.now() - 7 * 24 * 3600_000;
   const threeDays = Date.now() - 72 * 3600_000;
@@ -39,7 +45,7 @@ async function campaignOptions(db: DB) {
     if (!l.campaign_id) continue;
     const c = out.get(l.campaign_id) ?? {
       id: l.campaign_id, name: l.campaign_name || l.campaign_id, ad_account_id: l.ad_account_id,
-      last: l.submitted_at, leads_7d: 0, unworked_72h: 0,
+      last: l.submitted_at, leads_7d: 0, unworked_72h: 0, active: false,
     };
     const t = Date.parse(l.submitted_at);
     if (t >= weekAgo) c.leads_7d++;
@@ -50,10 +56,41 @@ async function campaignOptions(db: DB) {
     if (out.has(i.campaign_id)) continue;
     out.set(i.campaign_id, {
       id: i.campaign_id, name: i.campaign_name || i.campaign_id, ad_account_id: i.ad_account_id,
-      last: i.updated_at, leads_7d: 0, unworked_72h: 0,
+      last: i.updated_at, leads_7d: 0, unworked_72h: 0, active: false,
     });
   }
-  return [...out.values()].sort((a, b) => (a.last < b.last ? 1 : -1));
+
+  // Meta's own word on what is running - and the only way a campaign launched
+  // minutes ago, with no leads or insights yet, shows up here at all.
+  for (const c of await liveCampaigns(db)) {
+    const known = out.get(c.id);
+    if (known) known.active = c.effective_status === "ACTIVE";
+    else if (c.effective_status === "ACTIVE") {
+      out.set(c.id, {
+        id: c.id, name: c.name || c.id, ad_account_id: c.ad_account_id ?? null,
+        last: c.created_time, leads_7d: 0, unworked_72h: 0, active: true,
+      });
+    }
+  }
+
+  // Running campaigns first, then by recent leads, then by latest activity.
+  return [...out.values()].sort(
+    (a, b) => Number(b.active) - Number(a.active) || b.leads_7d - a.leads_7d || (a.last < b.last ? 1 : -1)
+  );
+}
+
+/** Every connected account's campaigns with their delivery status, cached briefly. */
+let liveCache: { at: number; list: Campaign[] } | null = null;
+async function liveCampaigns(db: DB): Promise<Campaign[]> {
+  if (liveCache && Date.now() - liveCache.at < 5 * 60_000) return liveCache.list;
+  try {
+    const { scopes } = await activeAccounts(db);
+    const lists = await Promise.all(scopes.map((sc) => listCampaigns(sc).catch(() => [] as Campaign[])));
+    liveCache = { at: Date.now(), list: lists.flat() };
+    return liveCache.list;
+  } catch {
+    return liveCache?.list ?? [];
+  }
 }
 
 async function rulesWithRoutes(db: DB) {

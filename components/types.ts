@@ -92,6 +92,8 @@ export type CampaignOption = {
   last: string;
   leads_7d: number;
   unworked_72h: number;
+  /** Delivering in the latest insights pull. */
+  active?: boolean;
 };
 
 export type AdRow = {

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Card, Empty, fmtAgo, fmtDate } from "./ui";
 import { useLang } from "./LangProvider";
 import type { AgentRow, CampaignOption, RoutingRuleRow } from "./types";
+import AgentReport from "./AgentReport";
 
 /**
  * Where the latest agent app lives. GitHub serves the newest release's file
@@ -38,6 +39,7 @@ export default function AgentsView({ pw }: { pw: string }) {
       const json = await res.json().catch(() => ({}));
       if (!res.ok || json.ok === false) {
         const code = String(json.error || res.status);
+        if (code === "agent_has_leads") throw new Error(`agent_has_leads:${json.leads ?? 0}`);
         throw new Error(t.agErr[code] || (code === "shares_must_total_100" ? t.rtMustBe100 : code));
       }
       return json;
@@ -105,6 +107,8 @@ export default function AgentsView({ pw }: { pw: string }) {
 
       <AgentsCard agents={agents} loading={loading} run={run} api={api} />
 
+      <AgentReport pw={pw} />
+
       <RoutingCard
         agents={agents}
         agentName={agentName}
@@ -136,6 +140,35 @@ function AgentsCard({
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ name: "", username: "", password: "", phone: "" });
   const [created, setCreated] = useState<{ username: string; password: string } | null>(null);
+  const [editing, setEditing] = useState<{ id: string; name: string; username: string; phone: string } | null>(null);
+  const [deleting, setDeleting] = useState<{ id: string; leads: number; moveTo: string } | null>(null);
+
+  const saveEdit = () =>
+    editing &&
+    run(async () => {
+      await api("/api/admin/agents", {
+        action: "update",
+        id: editing.id,
+        name: editing.name,
+        username: editing.username,
+        phone: editing.phone,
+      });
+      setEditing(null);
+    }, t.rtSaved);
+
+  // First ask plainly; if they still hold leads, the server says how many and
+  // the card asks where those go before anything is deleted.
+  const remove = async (a: AgentRow) => {
+    if (!window.confirm(t.agDeleteConfirm)) return;
+    try {
+      await api("/api/admin/agents", { action: "delete", id: a.id });
+      await run(async () => {}, t.agDeleted);
+    } catch (e) {
+      const m = e instanceof Error ? e.message : "";
+      if (m.startsWith("agent_has_leads:")) setDeleting({ id: a.id, leads: Number(m.split(":")[1]) || 0, moveTo: "" });
+      else await run(() => Promise.reject(e));
+    }
+  };
 
   const create = () =>
     run(async () => {
@@ -260,7 +293,81 @@ function AgentsCard({
                 )
               )}
 
+              {editing?.id === a.id && (
+                <div className="mt-3 grid gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <input className={input} placeholder={t.agName} value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} />
+                  <input
+                    className={input}
+                    dir="ltr"
+                    autoCapitalize="none"
+                    placeholder={t.agUsername}
+                    value={editing.username}
+                    onChange={(e) => setEditing({ ...editing, username: e.target.value.replace(/\s/g, "") })}
+                  />
+                  <input className={input} dir="ltr" placeholder={t.agPhone} value={editing.phone} onChange={(e) => setEditing({ ...editing, phone: e.target.value })} />
+                  <div className="flex gap-2">
+                    <button onClick={saveEdit} className="tap rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-700">
+                      {t.agSave}
+                    </button>
+                    <button onClick={() => setEditing(null)} className="tap rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium">
+                      {t.agCancel}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {deleting?.id === a.id && (
+                <div className="mt-3 space-y-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm">
+                  <p className="font-medium text-red-900">{t.agDeleteMove(deleting.leads)}</p>
+                  <select
+                    value={deleting.moveTo}
+                    onChange={(e) => setDeleting({ ...deleting, moveTo: e.target.value })}
+                    className="tap w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+                  >
+                    <option value="">—</option>
+                    {agents
+                      .filter((x) => x.id !== a.id && x.active)
+                      .map((x) => (
+                        <option key={x.id} value={x.id}>
+                          {x.name}
+                        </option>
+                      ))}
+                    <option value="__8x">{t.agDeleteTo8x}</option>
+                  </select>
+                  <div className="flex gap-2">
+                    <button
+                      disabled={!deleting.moveTo}
+                      onClick={() =>
+                        run(async () => {
+                          await api("/api/admin/agents", {
+                            action: "delete",
+                            id: a.id,
+                            move_to: deleting.moveTo === "__8x" ? null : deleting.moveTo,
+                          });
+                          setDeleting(null);
+                        }, t.agDeleted)
+                      }
+                      className="tap rounded-lg bg-red-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-40"
+                    >
+                      {t.agDeleteNow}
+                    </button>
+                    <button onClick={() => setDeleting(null)} className="tap rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium">
+                      {t.agCancel}
+                    </button>
+                  </div>
+                </div>
+              )}
+
               <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                <button
+                  onClick={() => {
+                    setDeleting(null);
+                    setEditing({ id: a.id, name: a.name, username: a.username, phone: a.phone || "" });
+                  }}
+                  className="tap rounded-lg border border-slate-300 px-2.5 font-medium hover:bg-slate-50"
+                >
+                  {t.agEdit}
+                </button>
                 <button
                   onClick={() => run(() => api("/api/admin/agents", { action: "update", id: a.id, active: !a.active }))}
                   className="tap rounded-lg border border-slate-300 px-2.5 font-medium hover:bg-slate-50"
@@ -291,6 +398,15 @@ function AgentsCard({
                     {t.agTestLead}
                   </button>
                 )}
+                <button
+                  onClick={() => {
+                    setEditing(null);
+                    remove(a);
+                  }}
+                  className="tap rounded-lg border border-red-200 px-2.5 font-medium text-red-700 hover:bg-red-50"
+                >
+                  {t.agDelete}
+                </button>
               </div>
             </li>
           ))}
@@ -317,6 +433,25 @@ const evenSplit = (ids: string[]): Record<string, number> => {
   return out;
 };
 
+/**
+ * Set one agent's share and spread what is left over the others in proportion
+ * to their current shares (evenly if they are all at 0), in whole percents, so
+ * the total is always exactly 100.
+ */
+function rebalance(shares: Record<string, number>, id: string, value: number): Record<string, number> {
+  const others = Object.keys(shares).filter((x) => x !== id);
+  if (others.length === 0) return { [id]: 100 };
+  const v = Math.max(0, Math.min(100, Math.round(value) || 0));
+  const rest = 100 - v;
+  const base = others.reduce((sum, x) => sum + (shares[x] || 0), 0);
+  const raw = others.map((x) => (base > 0 ? ((shares[x] || 0) / base) * rest : rest / others.length));
+  const out = raw.map(Math.floor);
+  let left = rest - out.reduce((a, b) => a + b, 0);
+  const byRemainder = raw.map((r, i) => [r - out[i], i] as const).sort((a, b) => b[0] - a[0]);
+  for (let k = 0; left > 0; k++, left--) out[byRemainder[k % byRemainder.length][1]]++;
+  return { ...Object.fromEntries(others.map((x, i) => [x, out[i]])), [id]: v };
+}
+
 function RoutingCard({
   agents,
   agentName,
@@ -342,6 +477,16 @@ function RoutingCard({
   const total = draft ? Object.values(draft.shares).reduce((s, v) => s + (Number(v) || 0), 0) : 0;
   const campaignName = (id: string) => campaigns.find((c) => c.id === id)?.name || rules.find((r) => r.campaign_id === id)?.campaign_name || id;
   const draftCampaign = draft ? campaigns.find((c) => c.id === draft.campaign_id) : undefined;
+  const routed = new Set(rules.map((r) => r.campaign_id));
+  const editingExisting = !!draft && routed.has(draft.campaign_id) && rules.some((r) => r.campaign_id === draft.campaign_id);
+  const picked = draft ? Object.keys(draft.shares) : [];
+  // Who can be picked: active agents, plus anyone already on this rule.
+  const pickable = agents.filter((a) => a.active || picked.includes(a.id));
+  const toggle = (id: string) => {
+    if (!draft) return;
+    const next = picked.includes(id) ? picked.filter((x) => x !== id) : [...picked, id];
+    setDraft({ ...draft, shares: evenSplit(next) });
+  };
 
   const edit = (rule?: RoutingRuleRow) =>
     setDraft(
@@ -352,7 +497,7 @@ function RoutingCard({
             reassign: rule.reassign_after_min ?? 0,
             backfill: false,
           }
-        : { campaign_id: "", shares: evenSplit(activeAgents.map((a) => a.id)), reassign: 0, backfill: false }
+        : { campaign_id: "", shares: {}, reassign: 0, backfill: false }
     );
 
   const save = (d: Draft) =>
@@ -405,65 +550,103 @@ function RoutingCard({
             <select
               value={draft.campaign_id}
               onChange={(e) => setDraft({ ...draft, campaign_id: e.target.value })}
-              className="tap mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+              disabled={editingExisting}
+              className="tap mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm disabled:bg-slate-100"
             >
               <option value="">{t.rtPick}</option>
-              {campaigns.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name} · {c.leads_7d} {t.rtLeads7d}
-                </option>
-              ))}
+              {[
+                [t.rtActive, campaigns.filter((c) => c.active)],
+                [t.rtOthers, campaigns.filter((c) => !c.active)],
+              ].map(([label, list]) =>
+                (list as CampaignOption[]).length === 0 ? null : (
+                  <optgroup key={label as string} label={label as string}>
+                    {(list as CampaignOption[]).map((c) => {
+                      const taken = routed.has(c.id) && !(editingExisting && c.id === draft.campaign_id);
+                      return (
+                        <option key={c.id} value={c.id} disabled={taken}>
+                          {c.name} · {c.leads_7d} {t.rtLeads7d}
+                          {routed.has(c.id) ? ` · ${t.rtRouted}` : ""}
+                        </option>
+                      );
+                    })}
+                  </optgroup>
+                )
+              )}
             </select>
           </label>
 
           <div>
             <div className="flex items-center justify-between">
               <span className="text-xs font-medium text-slate-600">{t.rtAgents}</span>
-              <button
-                onClick={() => setDraft({ ...draft, shares: evenSplit(Object.keys(draft.shares).filter((id) => draft.shares[id] > 0).length ? Object.keys(draft.shares).filter((id) => draft.shares[id] > 0) : activeAgents.map((a) => a.id)) })}
-                className="text-xs font-medium text-brand-700 hover:underline"
-              >
-                {t.rtSplitEven}
-              </button>
+              {picked.length > 1 && (
+                <button onClick={() => setDraft({ ...draft, shares: evenSplit(picked) })} className="text-xs font-medium text-brand-700 hover:underline">
+                  {t.rtSplitEven}
+                </button>
+              )}
             </div>
-            <ul className="mt-2 divide-y divide-slate-200 rounded-xl border border-slate-200 bg-white">
-              {activeAgents.map((a) => {
-                const v = draft.shares[a.id] ?? 0;
+            <p className="mt-1 text-xs text-slate-500">{t.rtPickAgents}</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {pickable.map((a) => {
+                const on = picked.includes(a.id);
                 return (
-                  <li key={a.id} className="flex items-center gap-3 px-3 py-2">
-                    <span className={`h-2 w-2 shrink-0 rounded-full ${a.online ? "bg-emerald-500" : "bg-slate-300"}`} />
-                    <span className="min-w-0 flex-1 truncate text-sm font-medium">
-                      <bdi>{a.name}</bdi>
-                    </span>
-                    <input
-                      type="range"
-                      min={0}
-                      max={100}
-                      step={5}
-                      value={v}
-                      onChange={(e) => setDraft({ ...draft, shares: { ...draft.shares, [a.id]: Number(e.target.value) } })}
-                      className="hidden w-40 accent-brand-600 sm:block"
-                    />
-                    <div className="flex items-center gap-1">
-                      <input
-                        type="number"
-                        inputMode="numeric"
-                        min={0}
-                        max={100}
-                        value={v}
-                        onChange={(e) =>
-                          setDraft({ ...draft, shares: { ...draft.shares, [a.id]: Math.max(0, Math.min(100, Number(e.target.value) || 0)) } })
-                        }
-                        className="tap w-16 rounded-lg border border-slate-300 px-2 py-1 text-end text-sm tabular-nums"
-                      />
-                      <span className="text-sm text-slate-500">%</span>
-                    </div>
-                  </li>
+                  <button
+                    key={a.id}
+                    onClick={() => toggle(a.id)}
+                    aria-pressed={on}
+                    className={`tap inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm font-medium ${
+                      on ? "border-brand-600 bg-brand-600 text-white" : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                    }`}
+                  >
+                    <span className={`h-2 w-2 rounded-full ${a.online ? "bg-emerald-400" : on ? "bg-white/60" : "bg-slate-300"}`} />
+                    <bdi>{a.name}</bdi>
+                    {on && <span aria-hidden>✓</span>}
+                  </button>
                 );
               })}
-            </ul>
-            <p className={`mt-1.5 text-xs font-medium ${total === 100 ? "text-emerald-700" : "text-red-600"}`}>
-              {t.rtTotal}: {total}%{total !== 100 ? ` — ${t.rtMustBe100}` : ""}
+            </div>
+
+            {picked.length > 0 && (
+              <ul className="mt-3 divide-y divide-slate-200 rounded-xl border border-slate-200 bg-white">
+                {pickable
+                  .filter((a) => picked.includes(a.id))
+                  .map((a) => {
+                    const v = draft.shares[a.id] ?? 0;
+                    const only = picked.length === 1;
+                    return (
+                      <li key={a.id} className="flex items-center gap-3 px-3 py-2">
+                        <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                          <bdi>{a.name}</bdi>
+                        </span>
+                        <input
+                          type="range"
+                          min={0}
+                          max={100}
+                          step={5}
+                          value={v}
+                          disabled={only}
+                          onChange={(e) => setDraft({ ...draft, shares: rebalance(draft.shares, a.id, Number(e.target.value)) })}
+                          className="hidden w-40 accent-brand-600 sm:block"
+                        />
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="number"
+                            inputMode="numeric"
+                            min={0}
+                            max={100}
+                            value={v}
+                            disabled={only}
+                            onChange={(e) => setDraft({ ...draft, shares: rebalance(draft.shares, a.id, Number(e.target.value)) })}
+                            className="tap w-16 rounded-lg border border-slate-300 px-2 py-1 text-end text-sm tabular-nums disabled:bg-slate-100"
+                          />
+                          <span className="text-sm text-slate-500">%</span>
+                        </div>
+                      </li>
+                    );
+                  })}
+              </ul>
+            )}
+            <p className={`mt-1.5 text-xs font-medium ${picked.length === 0 ? "text-red-600" : "text-emerald-700"}`}>
+              {picked.length === 0 ? t.rtNoAgentPicked : `${t.rtTotal}: ${total}%`}
             </p>
           </div>
 
@@ -502,7 +685,7 @@ function RoutingCard({
           <div className="flex gap-2">
             <button
               onClick={() => save(draft)}
-              disabled={!draft.campaign_id || total !== 100}
+              disabled={!draft.campaign_id || picked.length === 0 || total !== 100}
               className="tap rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-40"
             >
               {t.rtSave}
@@ -520,6 +703,8 @@ function RoutingCard({
         <ul className="divide-y divide-slate-200">
           {rules.map((r) => {
             const live = r.routes.filter((x) => x.weight > 0);
+            // A rule whose agents were all disabled or deleted hands nothing out.
+            const working = live.filter((x) => agents.some((a) => a.id === x.agent_id && a.active));
             return (
               <li key={r.campaign_id} className="px-5 py-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
@@ -558,6 +743,9 @@ function RoutingCard({
                   </div>
                 </div>
 
+                {r.enabled && working.length === 0 && (
+                  <p className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-700">⚠ {t.rtNoActiveAgent}</p>
+                )}
                 {/* The split as one bar, so 70/30 reads at a glance. */}
                 <div className="mt-3 flex h-7 overflow-hidden rounded-lg border border-slate-200 text-[11px] font-semibold text-white">
                   {live.map((x, i) => (
