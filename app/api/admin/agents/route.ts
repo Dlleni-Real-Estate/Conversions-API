@@ -114,7 +114,8 @@ export async function GET(req: NextRequest) {
 /**
  * POST, one of:
  *   { action: "create", name, username, password, phone? }
- *   { action: "update", id, name?, phone?, active? }
+ *   { action: "update", id, name?, username?, phone?, active? }
+ *   { action: "delete", id, move_to? }      see below
  *   { action: "password", id, password }    also signs every device out
  *   { action: "signout", id }               signs every device out
  */
@@ -159,13 +160,64 @@ export async function POST(req: NextRequest) {
     if (typeof body.name === "string" && body.name.trim()) patch.name = body.name.trim().slice(0, 80);
     if (typeof body.phone === "string") patch.phone = body.phone.trim().slice(0, 30) || null;
     if (typeof body.active === "boolean") patch.active = body.active;
+    if (body.username !== undefined) {
+      const username = normaliseUsername(body.username);
+      if (!username) return NextResponse.json({ ok: false, error: "bad_username" }, { status: 400 });
+      patch.username = username;
+    }
     if (Object.keys(patch).length === 0) return NextResponse.json({ ok: false, error: "nothing_to_change" }, { status: 400 });
     const { data, error } = await db.from("agents").update(patch).eq("id", id).select(AGENT_COLUMNS).single();
-    if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+    if (error) {
+      const taken = /duplicate key|unique/i.test(error.message);
+      return NextResponse.json({ ok: false, error: taken ? "username_taken" : error.message }, { status: taken ? 409 : 500 });
+    }
     // Switched off: their phone stops on its very next request.
     if (patch.active === false) await db.from("agent_sessions").delete().eq("agent_id", id);
+    // The lead lists show the owner's name; a rename should read the same there.
+    if (typeof patch.name === "string") await db.from("leads").update({ owner: patch.name }).eq("agent_id", id);
     await logAudit(req, "agent_update", id, patch);
     return NextResponse.json({ ok: true, agent: data });
+  }
+
+  /**
+   * { action: "delete", id, move_to? }
+   * An agent's leads cannot simply lose their owner: an unowned lead that was
+   * never sent to 8X would be pushed there on the next sync. So the admin says
+   * where they go - another agent, or `null` for "back to 8X" - whenever there
+   * are any; without that answer the call reports how many there are.
+   */
+  if (action === "delete") {
+    const { count } = await db.from("leads").select("lead_id", { count: "exact", head: true }).eq("agent_id", id).eq("is_test", false);
+    const held = count ?? 0;
+    if (held > 0 && body.move_to === undefined) {
+      return NextResponse.json({ ok: false, error: "agent_has_leads", leads: held }, { status: 409 });
+    }
+    if (held > 0) {
+      const moveTo = body.move_to === null ? null : String(body.move_to || "");
+      let target: { id: string; name: string } | null = null;
+      if (moveTo) {
+        const { data: t } = await db.from("agents").select("id,name").eq("id", moveTo).neq("id", id).maybeSingle();
+        if (!t) return NextResponse.json({ ok: false, error: "move_to_not_found" }, { status: 400 });
+        target = t as { id: string; name: string };
+      }
+      const { data: moved } = await db
+        .from("leads")
+        .update({ agent_id: target?.id ?? null, owner: target?.name ?? null, acked_at: null })
+        .eq("agent_id", id)
+        .eq("is_test", false)
+        .select("lead_id");
+      if (target && moved?.length) {
+        await db.from("lead_notes").insert(
+          moved.map((l: { lead_id: string }) => ({ lead_id: l.lead_id, kind: "assign", body: target!.name, author: "admin" }))
+        );
+      }
+    }
+    // Test leads are pretend: they go with the agent.
+    await db.from("leads").delete().eq("agent_id", id).eq("is_test", true);
+    const { error } = await db.from("agents").delete().eq("id", id);
+    if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+    await logAudit(req, "agent_delete", id, { moved: held, move_to: body.move_to ?? null });
+    return NextResponse.json({ ok: true, moved: held });
   }
 
   if (action === "password") {
